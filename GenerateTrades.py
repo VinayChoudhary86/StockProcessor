@@ -131,7 +131,7 @@ def generate_signals(df, threshold_pct, min_oi_sum):
 
 
 # ------------------------------------------------------------------------------------
-# TRADE SIMULATION
+# TRADE SIMULATION (VWAP FILTER ADDED)
 # ------------------------------------------------------------------------------------
 def simulate_trades(df, investment_amount):
 
@@ -160,7 +160,25 @@ def simulate_trades(df, investment_amount):
         if current_price > 0:
             calculated_trade_qty = math.floor(investment_amount / current_price)
 
-        if signal_prev_day == 'BUY':
+        # --------------------------------------------------------------------------------
+        # VWAP FILTER (0.5%)
+        # BUY allowed when near VWAP (<=0.5%) or above VWAP
+        # SELL allowed when near VWAP (<=0.5%) or below VWAP
+        # --------------------------------------------------------------------------------
+        vwap = df.loc[i, 'vwap'] if 'vwap' in df.columns else None
+        allow_buy = True
+        allow_sell = True
+
+        if vwap and vwap > 0:
+            diff_pct = abs(current_price - vwap) / vwap * 100
+
+            allow_buy = (diff_pct <= 0.5) or (current_price > vwap)
+            allow_sell = (diff_pct <= 0.5) or (current_price < vwap)
+
+        # --------------------------------------------------------------------------------
+        # BUY LOGIC WITH VWAP FILTER
+        # --------------------------------------------------------------------------------
+        if signal_prev_day == 'BUY' and allow_buy:
             if ltn_prev_day > stn_prev_day:
 
                 if position < 0:
@@ -174,7 +192,10 @@ def simulate_trades(df, investment_amount):
 
                     last_buy_trigger_ltn = ltn_prev_day
 
-        elif signal_prev_day == 'SELL':
+        # --------------------------------------------------------------------------------
+        # SELL LOGIC WITH VWAP FILTER
+        # --------------------------------------------------------------------------------
+        elif signal_prev_day == 'SELL' and allow_sell:
             if stn_prev_day > ltn_prev_day:
 
                 if position > 0:
@@ -227,9 +248,6 @@ def run_pipeline():
         df_signals = generate_signals(df_cleaned, DIFFERENCE_THRESHOLD_PCT, MINIMUM_OI_SUM)
         df_trades = simulate_trades(df_signals, INVESTMENT_AMOUNT)
 
-        # -------------------------------
-        # OUTPUT COLUMNS including VWAP
-        # -------------------------------
         output_cols = [
             DATE_COL, CLOSE_COL, 'vwap',
             LONG_TILL_NOW_COL, SHORT_TILL_NOW_COL,
