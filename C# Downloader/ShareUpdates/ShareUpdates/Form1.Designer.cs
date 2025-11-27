@@ -88,7 +88,7 @@
             this.DateFrom.Name = "DateFrom";
             this.DateFrom.Size = new System.Drawing.Size(200, 20);
             this.DateFrom.TabIndex = 4;
-            this.DateFrom.ValueChanged += new System.EventHandler(this.DateFrom_ValueChanged);
+            //this.DateFrom.ValueChanged += new System.EventHandler(this.DateFrom_ValueChanged);
             // 
             // DateTo
             // 
@@ -114,7 +114,7 @@
             this.MoveDataToDatabase.TabIndex = 8;
             this.MoveDataToDatabase.Text = "Move Data To Database";
             this.MoveDataToDatabase.UseVisualStyleBackColor = true;
-            this.MoveDataToDatabase.Click += new System.EventHandler(this.MoveDataToDatabase_Click);
+            //this.MoveDataToDatabase.Click += new System.EventHandler(this.MoveDataToDatabase_Click);
             // 
             // DownloadAll
             // 
@@ -135,7 +135,7 @@
             this.ProcessData.TabIndex = 10;
             this.ProcessData.Text = "Process Data";
             this.ProcessData.UseVisualStyleBackColor = true;
-            this.ProcessData.Click += new System.EventHandler(this.ProcessData_Click);
+            //this.ProcessData.Click += new System.EventHandler(this.ProcessData_Click);
             // 
             // chart1
             // 
@@ -161,7 +161,7 @@
             this.ChartRepresentation.TabIndex = 12;
             this.ChartRepresentation.Text = "Chart Representation";
             this.ChartRepresentation.UseVisualStyleBackColor = true;
-            this.ChartRepresentation.Click += new System.EventHandler(this.ChartRepresentation_Click);
+            //this.ChartRepresentation.Click += new System.EventHandler(this.ChartRepresentation_Click);
             // 
             // imageList1
             // 
@@ -235,7 +235,7 @@
             this.MoveDeliveryDataToDatabase.TabIndex = 19;
             this.MoveDeliveryDataToDatabase.Text = "MoveDeliveryDataToDatabase";
             this.MoveDeliveryDataToDatabase.UseVisualStyleBackColor = true;
-            this.MoveDeliveryDataToDatabase.Click += new System.EventHandler(this.MoveDeliveryDataToDatabase_Click);
+            //this.MoveDeliveryDataToDatabase.Click += new System.EventHandler(this.MoveDeliveryDataToDatabase_Click);
             // 
             // NSEData
             // 

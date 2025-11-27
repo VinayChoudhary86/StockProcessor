@@ -28,3 +28,13 @@ D:\Backup\NSE\ShareUpdates\ShareUpdates\obj\Debug\ShareUpdates.csproj.GenerateRe
 D:\Backup\NSE\ShareUpdates\ShareUpdates\obj\Debug\ShareUpdates.csproj.CoreCompileInputs.cache
 D:\Backup\NSE\ShareUpdates\ShareUpdates\obj\Debug\ShareUpdates.exe
 D:\Backup\NSE\ShareUpdates\ShareUpdates\obj\Debug\ShareUpdates.pdb
+D:\Shares\Code\ProcessProject\C# Downloader\ShareUpdates\ShareUpdates\obj\Debug\ShareUpdates.csproj.AssemblyReference.cache
+D:\Shares\Code\ProcessProject\C# Downloader\ShareUpdates\ShareUpdates\obj\Debug\ShareUpdates.NSEData.resources
+D:\Shares\Code\ProcessProject\C# Downloader\ShareUpdates\ShareUpdates\obj\Debug\ShareUpdates.Properties.Resources.resources
+D:\Shares\Code\ProcessProject\C# Downloader\ShareUpdates\ShareUpdates\obj\Debug\ShareUpdates.csproj.GenerateResource.cache
+D:\Shares\Code\ProcessProject\C# Downloader\ShareUpdates\ShareUpdates\obj\Debug\ShareUpdates.csproj.CoreCompileInputs.cache
+D:\Shares\Code\ProcessProject\C# Downloader\ShareUpdates\ShareUpdates\bin\Debug\ShareUpdates.exe.config
+D:\Shares\Code\ProcessProject\C# Downloader\ShareUpdates\ShareUpdates\bin\Debug\ShareUpdates.exe
+D:\Shares\Code\ProcessProject\C# Downloader\ShareUpdates\ShareUpdates\bin\Debug\ShareUpdates.pdb
+D:\Shares\Code\ProcessProject\C# Downloader\ShareUpdates\ShareUpdates\obj\Debug\ShareUpdates.exe
+D:\Shares\Code\ProcessProject\C# Downloader\ShareUpdates\ShareUpdates\obj\Debug\ShareUpdates.pdb
