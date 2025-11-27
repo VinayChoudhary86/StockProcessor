@@ -47,6 +47,11 @@ def run_plotting():
         # Compute net quantity
         df['Net_Qty'] = df[QUANTITY_TRADED_COL].cumsum()
 
+        # Compute Cumulative P&L (mark-to-market)
+        df['Prev_Close'] = df[CLOSE_COL].shift(1).fillna(df[CLOSE_COL].iloc[0])
+        df['PnL'] = (df[CLOSE_COL] - df['Prev_Close']) * df['Net_Qty']
+        df['Cumulative_PnL'] = df['PnL'].cumsum()
+
         # Compute EMAs
         df["EMA_9"] = df[CLOSE_COL].ewm(span=9, adjust=False).mean()
         df["EMA_21"] = df[CLOSE_COL].ewm(span=21, adjust=False).mean()
@@ -58,14 +63,27 @@ def run_plotting():
         df['High'] = df[[CLOSE_COL, 'Open']].max(axis=1) * (1 + range_pct)
         df['Low'] = df[[CLOSE_COL, 'Open']].min(axis=1) * (1 - range_pct)
 
-        # Candlestick
+        # Candlestick with hover text including P&L
+        hover_text = [
+            f"Date: {row[DATE_COL].strftime('%Y-%m-%d')}<br>"
+            f"Open: {row['Open']:.2f}<br>"
+            f"High: {row['High']:.2f}<br>"
+            f"Low: {row['Low']:.2f}<br>"
+            f"Close: {row[CLOSE_COL]:.2f}<br>"
+            f"Net Qty: {row['Net_Qty']}<br>"
+            f"Cumulative P&L: {row['Cumulative_PnL']:.2f}"
+            for _, row in df.iterrows()
+        ]
+
         candlestick = go.Candlestick(
             x=df[DATE_COL],
             open=df['Open'],
             high=df['High'],
             low=df['Low'],
             close=df[CLOSE_COL],
-            name='Price'
+            name='Price',
+            hovertext=hover_text,
+            hoverinfo='text'
         )
 
         # EMA Lines
@@ -143,10 +161,24 @@ def run_plotting():
             layout=layout
         )
 
+        # Add cumulative P&L annotation at top
+        final_pnl = df['Cumulative_PnL'].iloc[-1]
+        pnl_color = 'lime' if final_pnl >= 0 else 'red'
+
+        fig.add_annotation(
+            x=df[DATE_COL].iloc[-1],
+            y=df[CLOSE_COL].max() * 1.05,
+            text=f"Cumulative P&L: {final_pnl:.2f}",
+            showarrow=False,
+            font=dict(size=16, color=pnl_color),
+            xanchor='right',
+            yanchor='bottom'
+        )
+
         # Save and open chart automatically
         plot(fig,
              filename=OUTPUT_INTERACTIVE_CHART_FILE,
-             auto_open=True,  # <-- opens in browser
+             auto_open=True,
              config={'displayModeBar': True}
         )
 
