@@ -5,7 +5,7 @@ import os
 # --- Script file names (make sure these match exactly your filenames) ---
 SCRIPT_1 = "ProcessData.py"       # Analysis generator
 SCRIPT_2 = "GenerateTrades.py"   # Trade generator
-SCRIPT_3 = "PlotChart.py"      # Interactive chart
+SCRIPT_3 = "PlotChart.py"      # Interactive chart1
 
 # --- Helper to run a script ---
 def run_script(script_name):
