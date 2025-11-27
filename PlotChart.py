@@ -6,7 +6,7 @@ import plotly.graph_objects as go
 from plotly.offline import plot
 from config_loader import load_config  # type: ignore
 
-# Load ONCE
+# Load configuration
 cfg = load_config()
 TARGET_DIR = cfg["TARGET_DIRECTORY"]
 SYMBOL = cfg["SYMBOL"]
@@ -20,8 +20,7 @@ OUTPUT_INTERACTIVE_CHART_FILE = os.path.join(TARGET_DIR, CHART_OUTPUT_FILE_NAME)
 DATE_COL = 'DATE'
 CLOSE_COL = 'close'
 QUANTITY_TRADED_COL = 'Quantity_Traded'
-VWAP_COL = 'vwap'     # <-- NEW
-SIGNAL_COL = 'Signal'
+VWAP_COL = 'vwap'
 
 
 def run_plotting():
@@ -32,24 +31,28 @@ def run_plotting():
         return
 
     try:
+        # Load trades CSV
         df = pd.read_csv(INPUT_FILE, parse_dates=[DATE_COL], thousands=',')
         df.sort_values(DATE_COL, inplace=True)
 
         df[CLOSE_COL] = pd.to_numeric(df[CLOSE_COL], errors='coerce').fillna(method='ffill')
         df[QUANTITY_TRADED_COL] = pd.to_numeric(df[QUANTITY_TRADED_COL], errors='coerce').fillna(0)
 
-        # === VWAP from Trades File ===
+        # VWAP
         if VWAP_COL in df.columns:
             df[VWAP_COL] = pd.to_numeric(df[VWAP_COL], errors='coerce').fillna(method='ffill')
         else:
             raise KeyError("ERROR: 'vwap' column missing in *_Trades.csv. Please update Trader_11 first.")
 
-        # === Compute EMAs from Close Price ===
+        # Compute net quantity
+        df['Net_Qty'] = df[QUANTITY_TRADED_COL].cumsum()
+
+        # Compute EMAs
         df["EMA_9"] = df[CLOSE_COL].ewm(span=9, adjust=False).mean()
         df["EMA_21"] = df[CLOSE_COL].ewm(span=21, adjust=False).mean()
         df["EMA_50"] = df[CLOSE_COL].ewm(span=50, adjust=False).mean()
 
-        # === Approximate OHLC ===
+        # Approximate OHLC
         df['Open'] = df[CLOSE_COL].shift(1).fillna(df[CLOSE_COL].iloc[0])
         range_pct = 0.005
         df['High'] = df[[CLOSE_COL, 'Open']].max(axis=1) * (1 + range_pct)
@@ -65,55 +68,66 @@ def run_plotting():
             name='Price'
         )
 
-        # === EMA Lines ===
-        ema9_line = go.Scatter(
-            x=df[DATE_COL], y=df["EMA_9"],
-            mode='lines', name='EMA 9', line=dict(width=1.2, color='yellow')
-        )
-        ema21_line = go.Scatter(
-            x=df[DATE_COL], y=df["EMA_21"],
-            mode='lines', name='EMA 21', line=dict(width=1.2, color='cyan')
-        )
-        ema50_line = go.Scatter(
-            x=df[DATE_COL], y=df["EMA_50"],
-            mode='lines', name='EMA 50', line=dict(width=1.2, color='magenta')
-        )
+        # EMA Lines
+        ema9_line = go.Scatter(x=df[DATE_COL], y=df["EMA_9"], mode='lines', name='EMA 9', line=dict(width=1.2, color='yellow'))
+        ema21_line = go.Scatter(x=df[DATE_COL], y=df["EMA_21"], mode='lines', name='EMA 21', line=dict(width=1.2, color='cyan'))
+        ema50_line = go.Scatter(x=df[DATE_COL], y=df["EMA_50"], mode='lines', name='EMA 50', line=dict(width=1.2, color='magenta'))
 
-        # === VWAP LINE (from trades CSV) ===
-        vwap_line = go.Scatter(
-            x=df[DATE_COL], y=df[VWAP_COL],
-            mode='lines', name='VWAP', line=dict(width=1.5, color='orange')
-        )
+        # VWAP Line
+        vwap_line = go.Scatter(x=df[DATE_COL], y=df[VWAP_COL], mode='lines', name='VWAP', line=dict(width=1.5, color='orange'))
 
-        # BUY / SELL markers
+        # BUY / SELL trades
         buy_trades = df[df[QUANTITY_TRADED_COL] > 0].copy()
         sell_trades = df[df[QUANTITY_TRADED_COL] < 0].copy()
 
+        # Markers
         buy_marker = go.Scatter(
-            x=buy_trades[DATE_COL],
-            y=buy_trades[CLOSE_COL],
+            x=buy_trades[DATE_COL], y=buy_trades[CLOSE_COL],
             mode='markers',
             marker=dict(size=12, color='white', symbol='triangle-up'),
             name='BUY',
             hoverinfo='text',
-            hovertext=buy_trades.apply(
-                lambda row: f"BUY @ {row[CLOSE_COL]:.2f}<br>Qty: {row[QUANTITY_TRADED_COL]}",
-                axis=1
-            )
+            hovertext=buy_trades.apply(lambda row: f"BUY @ {row[CLOSE_COL]:.2f}<br>Net Qty: {row['Net_Qty']}", axis=1)
         )
 
         sell_marker = go.Scatter(
-            x=sell_trades[DATE_COL],
-            y=sell_trades[CLOSE_COL],
+            x=sell_trades[DATE_COL], y=sell_trades[CLOSE_COL],
             mode='markers',
             marker=dict(size=12, color='orange', symbol='triangle-down'),
             name='SELL',
             hoverinfo='text',
-            hovertext=sell_trades.apply(
-                lambda row: f"SELL @ {row[CLOSE_COL]:.2f}<br>Qty: {row[QUANTITY_TRADED_COL]}",
-                axis=1
-            )
+            hovertext=sell_trades.apply(lambda row: f"SELL @ {row[CLOSE_COL]:.2f}<br>Net Qty: {row['Net_Qty']}", axis=1)
         )
+
+        # Horizontal lines with net quantity labels
+        buy_lines = []
+        sell_lines = []
+
+        for _, row in df.iterrows():
+            if row[QUANTITY_TRADED_COL] > 0:
+                buy_lines.append(
+                    go.Scatter(
+                        x=[df[DATE_COL].min(), df[DATE_COL].max()],
+                        y=[row[CLOSE_COL], row[CLOSE_COL]],
+                        mode='lines+text',
+                        line=dict(color='lime', width=1.2, dash='dot'),
+                        text=[f"Net {int(row['Net_Qty'])}", ""],
+                        textposition="top left",
+                        showlegend=False
+                    )
+                )
+            elif row[QUANTITY_TRADED_COL] < 0:
+                sell_lines.append(
+                    go.Scatter(
+                        x=[df[DATE_COL].min(), df[DATE_COL].max()],
+                        y=[row[CLOSE_COL], row[CLOSE_COL]],
+                        mode='lines+text',
+                        line=dict(color='red', width=1.2, dash='dot'),
+                        text=[f"Net {int(row['Net_Qty'])}", ""],
+                        textposition="bottom left",
+                        showlegend=False
+                    )
+                )
 
         layout = go.Layout(
             title=f'Interactive Chart: {os.path.basename(INPUT_FILE)}',
@@ -125,21 +139,14 @@ def run_plotting():
         )
 
         fig = go.Figure(
-            data=[
-                candlestick,
-                ema9_line,
-                ema21_line,
-                ema50_line,
-                vwap_line,
-                buy_marker,
-                sell_marker
-            ],
+            data=[candlestick, ema9_line, ema21_line, ema50_line, vwap_line, buy_marker, sell_marker] + buy_lines + sell_lines,
             layout=layout
         )
 
+        # Save and open chart automatically
         plot(fig,
              filename=OUTPUT_INTERACTIVE_CHART_FILE,
-             auto_open=False,
+             auto_open=True,  # <-- opens in browser
              config={'displayModeBar': True}
         )
 
