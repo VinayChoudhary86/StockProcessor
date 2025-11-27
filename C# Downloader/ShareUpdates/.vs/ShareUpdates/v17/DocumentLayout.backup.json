@@ -1,0 +1,84 @@
+{
+  "Version": 1,
+  "WorkspaceRootPath": "D:\\Backup\\NSE\\ShareUpdates\\",
+  "Documents": [
+    {
+      "AbsoluteMoniker": "D:0:0:{904C0076-5C04-4D88-B57A-0582902A7378}|ShareUpdates\\ShareUpdates.csproj|d:\\backup\\nse\\shareupdates\\shareupdates\\form1.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}",
+      "RelativeMoniker": "D:0:0:{904C0076-5C04-4D88-B57A-0582902A7378}|ShareUpdates\\ShareUpdates.csproj|solutionrelative:shareupdates\\form1.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}"
+    },
+    {
+      "AbsoluteMoniker": "D:0:0:{904C0076-5C04-4D88-B57A-0582902A7378}|ShareUpdates\\ShareUpdates.csproj|D:\\Backup\\NSE\\ShareUpdates\\shareupdates\\program.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}",
+      "RelativeMoniker": "D:0:0:{904C0076-5C04-4D88-B57A-0582902A7378}|ShareUpdates\\ShareUpdates.csproj|solutionrelative:shareupdates\\program.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}"
+    },
+    {
+      "AbsoluteMoniker": "D:0:0:{904C0076-5C04-4D88-B57A-0582902A7378}|ShareUpdates\\ShareUpdates.csproj|D:\\Backup\\NSE\\ShareUpdates\\shareupdates\\sql\\storedprocedures.sql||{CC5D8DF0-88F4-4BB2-9DBB-B48CEE65C30A}",
+      "RelativeMoniker": "D:0:0:{904C0076-5C04-4D88-B57A-0582902A7378}|ShareUpdates\\ShareUpdates.csproj|solutionrelative:shareupdates\\sql\\storedprocedures.sql||{CC5D8DF0-88F4-4BB2-9DBB-B48CEE65C30A}"
+    },
+    {
+      "AbsoluteMoniker": "D:0:0:{904C0076-5C04-4D88-B57A-0582902A7378}|ShareUpdates\\ShareUpdates.csproj|D:\\Backup\\NSE\\ShareUpdates\\shareupdates\\class1.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}",
+      "RelativeMoniker": "D:0:0:{904C0076-5C04-4D88-B57A-0582902A7378}|ShareUpdates\\ShareUpdates.csproj|solutionrelative:shareupdates\\class1.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}"
+    }
+  ],
+  "DocumentGroupContainers": [
+    {
+      "Orientation": 0,
+      "VerticalTabListWidth": 256,
+      "DocumentGroups": [
+        {
+          "DockedWidth": 200,
+          "SelectedChildIndex": 0,
+          "Children": [
+            {
+              "$type": "Document",
+              "DocumentIndex": 0,
+              "Title": "Form1.cs",
+              "DocumentMoniker": "D:\\Backup\\NSE\\ShareUpdates\\ShareUpdates\\Form1.cs",
+              "RelativeDocumentMoniker": "ShareUpdates\\Form1.cs",
+              "ToolTip": "D:\\Backup\\NSE\\ShareUpdates\\ShareUpdates\\Form1.cs",
+              "RelativeToolTip": "ShareUpdates\\Form1.cs",
+              "ViewState": "AgIAAGUAAAAAAAAAAAAEwHIAAAAQAAAAAAAAAA==",
+              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000738|",
+              "WhenOpened": "2025-10-31T10:13:20.195Z",
+              "EditorCaption": ""
+            },
+            {
+              "$type": "Document",
+              "DocumentIndex": 2,
+              "Title": "StoredProcedures.sql ",
+              "DocumentMoniker": "D:\\Backup\\NSE\\ShareUpdates\\ShareUpdates\\Sql\\StoredProcedures.sql",
+              "RelativeDocumentMoniker": "ShareUpdates\\Sql\\StoredProcedures.sql",
+              "ToolTip": "D:\\Backup\\NSE\\ShareUpdates\\ShareUpdates\\Sql\\StoredProcedures.sql",
+              "RelativeToolTip": "ShareUpdates\\Sql\\StoredProcedures.sql",
+              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000826|",
+              "WhenOpened": "2025-10-31T10:14:45.806Z"
+            },
+            {
+              "$type": "Document",
+              "DocumentIndex": 3,
+              "Title": "Class1.cs",
+              "DocumentMoniker": "D:\\Backup\\NSE\\ShareUpdates\\ShareUpdates\\Class1.cs",
+              "RelativeDocumentMoniker": "ShareUpdates\\Class1.cs",
+              "ToolTip": "D:\\Backup\\NSE\\ShareUpdates\\ShareUpdates\\Class1.cs",
+              "RelativeToolTip": "ShareUpdates\\Class1.cs",
+              "ViewState": "AgIAAAMAAAAAAAAAAAAAABUAAAAhAAAAAAAAAA==",
+              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000738|",
+              "WhenOpened": "2024-07-02T17:37:16.36Z"
+            },
+            {
+              "$type": "Document",
+              "DocumentIndex": 1,
+              "Title": "Program.cs",
+              "DocumentMoniker": "D:\\Backup\\NSE\\ShareUpdates\\ShareUpdates\\Program.cs",
+              "RelativeDocumentMoniker": "ShareUpdates\\Program.cs",
+              "ToolTip": "D:\\Backup\\NSE\\ShareUpdates\\ShareUpdates\\Program.cs",
+              "RelativeToolTip": "ShareUpdates\\Program.cs",
+              "ViewState": "AgIAAAAAAAAAAAAAAAAAABIAAAAlAAAAAAAAAA==",
+              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000738|",
+              "WhenOpened": "2024-07-02T17:37:04.941Z"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
