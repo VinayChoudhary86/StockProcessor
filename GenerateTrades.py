@@ -45,16 +45,15 @@ def clean_data(df):
     # Clean required columns
     for col in required_cols:
         if col in df.columns:
-            df[col] = df[col].astype(str).str.replace(r'[^\d\.\-]', '', regex=True)
-            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+            # Use pd.to_numeric with coerce for robust cleaning
+            df[col] = pd.to_numeric(df[col].astype(str).str.replace(r'[^\d\.\-]', '', regex=True), errors='coerce').fillna(0)
         else:
             raise KeyError(f"Required column not found: '{col}'.")
 
     # Clean optional numeric columns
     for col in optional_numeric_cols:
         if col in df.columns:
-            df[col] = df[col].astype(str).str.replace(r'[^\d\.\-]', '', regex=True)
-            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(method='ffill')
+            df[col] = pd.to_numeric(df[col].astype(str).str.replace(r'[^\d\.\-]', '', regex=True), errors='coerce').fillna(method='ffill')
 
     df.dropna(subset=[OI_SUM_COL, LONG_TILL_NOW_COL, SHORT_TILL_NOW_COL, CLOSE_COL], inplace=True)
     df.reset_index(drop=True, inplace=True)
@@ -144,17 +143,15 @@ def simulate_trades(df, investment_amount):
         signal_prev = df.loc[i - 1, 'Signal']
         ltn_prev = df.loc[i - 1, LONG_TILL_NOW_COL]
         stn_prev = df.loc[i - 1, SHORT_TILL_NOW_COL]
-        position = df.loc[i - 1, 'Position']
+        
+        # Position at the START of the current day (end of previous day)
+        position = df.loc[i - 1, 'Position'] 
 
+        # Calculate PnL based on the position held from the previous day
         df.loc[i, 'Daily_PnL'] = (current_price - previous_price) * position
 
         net_trade_qty = 0
         calculated_trade_qty = math.floor(investment_amount / current_price) if current_price > 0 else 0
-
-        # ------------------------------------------------------------------
-        # RULE: Do NOT take a new trade until previous trade is exited
-        # ------------------------------------------------------------------
-        new_trade_allowed = (position == 0)
 
         # ------------------------------------------------------------------
         # VWAP FILTER
@@ -163,28 +160,50 @@ def simulate_trades(df, investment_amount):
         allow_buy = allow_sell = True
 
         if vwap and vwap > 0:
+            # Note: This is checking the current price vs current VWAP for a new trade/exit
             diff_pct = abs(current_price - vwap) / vwap * 100
             allow_buy = (diff_pct <= 0.5) or (current_price > vwap)
             allow_sell = (diff_pct <= 0.5) or (current_price < vwap)
 
         # ------------------------------------------------------------------
-        # BUY LOGIC
+        # COMBINED EXIT/ENTRY LOGIC
         # ------------------------------------------------------------------
-        if signal_prev == 'BUY' and allow_buy and new_trade_allowed:
-            if ltn_prev > stn_prev and ltn_prev > last_buy_trigger_ltn:
-                position += calculated_trade_qty
-                net_trade_qty += calculated_trade_qty
-                last_buy_trigger_ltn = ltn_prev
+        
+        # --- 1. EXIT LOGIC (If a position is held and an opposite signal appears) ---
+        
+        # Exit Short Position (position < 0) on a BUY signal
+        if position < 0 and signal_prev == 'BUY' and allow_buy:
+            net_trade_qty = abs(position) # Buy to cover the short
+            position = 0                  # Position is now flat
+            last_sell_trigger_stn = 0     # Reset sell trigger
+            
+        # Exit Long Position (position > 0) on a SELL signal
+        elif position > 0 and signal_prev == 'SELL' and allow_sell:
+            net_trade_qty = -position     # Sell to close the long
+            position = 0                  # Position is now flat
+            last_buy_trigger_ltn = 0      # Reset buy trigger
+        
+        # --- 2. ENTRY LOGIC (Only if position is flat) ---
+        
+        elif position == 0:
+            
+            # BUY Entry
+            if signal_prev == 'BUY' and allow_buy:
+                if ltn_prev > stn_prev and ltn_prev > last_buy_trigger_ltn:
+                    net_trade_qty = calculated_trade_qty
+                    position += calculated_trade_qty
+                    last_buy_trigger_ltn = ltn_prev
+
+            # SELL Entry
+            elif signal_prev == 'SELL' and allow_sell:
+                if stn_prev > ltn_prev and stn_prev > last_sell_trigger_stn:
+                    net_trade_qty = -calculated_trade_qty
+                    position -= calculated_trade_qty
+                    last_sell_trigger_stn = stn_prev
 
         # ------------------------------------------------------------------
-        # SELL LOGIC
-        # ------------------------------------------------------------------
-        elif signal_prev == 'SELL' and allow_sell and new_trade_allowed:
-            if stn_prev > ltn_prev and stn_prev > last_sell_trigger_stn:
-                position -= calculated_trade_qty
-                net_trade_qty -= calculated_trade_qty
-                last_sell_trigger_stn = stn_prev
 
+        # Update the DataFrame for the current row 'i'
         df.loc[i, 'Quantity_Traded'] = net_trade_qty
         df.loc[i, 'Position'] = position
 
@@ -205,7 +224,8 @@ def run_pipeline():
 
     df = pd.read_csv(INPUT_FILE, thousands=',')
 
-    df_clean = clean_data(df.copy())
+    # The clean_data function uses pd.to_numeric(errors='coerce') which is more robust
+    df_clean = clean_data(df.copy()) 
     if df_clean.empty:
         print("ERROR: Data empty after cleaning.")
         return
