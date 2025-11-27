@@ -24,7 +24,6 @@ SYMBOL = cfg["SYMBOL"]
 ANALYSIS_FILE_NAME = f"{SYMBOL}_Analysis.csv"
 INPUT_FILE = os.path.join(TARGET_DIR, ANALYSIS_FILE_NAME)
 OUTPUT_FILE = os.path.join(TARGET_DIR, f"{SYMBOL}_Trades.csv")
-OUTPUT_IMAGE_FILE = os.path.join(TARGET_DIR, f"{SYMBOL}_Trades_Chart.png")
 
 DATE_COL = 'DATE'
 CLOSE_COL = 'close'
@@ -34,12 +33,12 @@ OI_SUM_COL = 'Daily_Open_Interest_Sum'
 
 
 # ------------------------------------------------------------------------------------
-# CLEANING FUNCTION (VWAP INCLUDED)
+# CLEANING FUNCTION
 # ------------------------------------------------------------------------------------
 def clean_data(df):
     """Clean and ensure necessary columns are numeric and filled."""
     required_cols = [LONG_TILL_NOW_COL, SHORT_TILL_NOW_COL, OI_SUM_COL, CLOSE_COL]
-    optional_numeric_cols = ['vwap']  # NEW COLUMN TO COPY
+    optional_numeric_cols = ['vwap']
 
     df.columns = df.columns.str.strip()
 
@@ -49,9 +48,9 @@ def clean_data(df):
             df[col] = df[col].astype(str).str.replace(r'[^\d\.\-]', '', regex=True)
             df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
         else:
-            raise KeyError(f"Required column not found: '{col}'. Please check your input file headers.")
+            raise KeyError(f"Required column not found: '{col}'.")
 
-    # Clean optional columns
+    # Clean optional numeric columns
     for col in optional_numeric_cols:
         if col in df.columns:
             df[col] = df[col].astype(str).str.replace(r'[^\d\.\-]', '', regex=True)
@@ -64,7 +63,7 @@ def clean_data(df):
 
 
 # ------------------------------------------------------------------------------------
-# OI MIN THRESHOLD CALC
+# MINIMUM OI
 # ------------------------------------------------------------------------------------
 def calculate_dynamic_min_oi(df):
     if df[OI_SUM_COL].empty:
@@ -72,7 +71,7 @@ def calculate_dynamic_min_oi(df):
 
     min_oi = df[OI_SUM_COL].quantile(0.25)
     if min_oi == 0:
-        warnings.warn("Calculated MINIMUM_OI_SUM is 0. Using 1 to ensure a minimum threshold.")
+        warnings.warn("MIN_OI is 0, setting to 1.")
         return 1
 
     return int(min_oi)
@@ -104,34 +103,30 @@ def generate_signals(df, threshold_pct, min_oi_sum):
         longs_increased = ltn > ltn_prev
         shorts_increased = stn > stn_prev
 
-        signal_to_append = 'HOLD'
+        signal = 'HOLD'
 
         is_long_doubling = (ltn_prev > 1) and (ltn >= 2 * ltn_prev)
         is_short_doubling = (stn_prev > 1) and (stn >= 2 * stn_prev)
-        is_within_range = (abs(ltn - stn) <= threshold)
+        is_within_range = abs(ltn - stn) <= threshold
 
-        if is_long_doubling and is_within_range and (ltn > stn):
-            if longs_increased:
-                signal_to_append = 'BUY'
-
-        elif is_short_doubling and is_within_range and (stn > ltn):
-            if shorts_increased:
-                signal_to_append = 'SELL'
-
-        if signal_to_append == 'HOLD':
+        if is_long_doubling and is_within_range and (ltn > stn) and longs_increased:
+            signal = 'BUY'
+        elif is_short_doubling and is_within_range and (stn > ltn) and shorts_increased:
+            signal = 'SELL'
+        else:
             if net_change > threshold and longs_increased:
-                signal_to_append = 'BUY'
+                signal = 'BUY'
             elif net_change < -threshold and shorts_increased:
-                signal_to_append = 'SELL'
+                signal = 'SELL'
 
-        signals.append(signal_to_append)
+        signals.append(signal)
 
     df['Signal'] = signals
     return df
 
 
 # ------------------------------------------------------------------------------------
-# TRADE SIMULATION (VWAP FILTER ADDED)
+# TRADE SIMULATION (VWAP FILTER + ONE-POSITION-ONLY RULE)
 # ------------------------------------------------------------------------------------
 def simulate_trades(df, investment_amount):
 
@@ -146,68 +141,49 @@ def simulate_trades(df, investment_amount):
         current_price = df.loc[i, CLOSE_COL]
         previous_price = df.loc[i - 1, CLOSE_COL]
 
-        signal_prev_day = df.loc[i - 1, 'Signal']
-        ltn_prev_day = df.loc[i - 1, LONG_TILL_NOW_COL]
-        stn_prev_day = df.loc[i - 1, SHORT_TILL_NOW_COL]
-        position_held_overnight = df.loc[i - 1, 'Position']
+        signal_prev = df.loc[i - 1, 'Signal']
+        ltn_prev = df.loc[i - 1, LONG_TILL_NOW_COL]
+        stn_prev = df.loc[i - 1, SHORT_TILL_NOW_COL]
+        position = df.loc[i - 1, 'Position']
 
-        df.loc[i, 'Daily_PnL'] = (current_price - previous_price) * position_held_overnight
+        df.loc[i, 'Daily_PnL'] = (current_price - previous_price) * position
 
-        position = position_held_overnight
         net_trade_qty = 0
+        calculated_trade_qty = math.floor(investment_amount / current_price) if current_price > 0 else 0
 
-        calculated_trade_qty = 0
-        if current_price > 0:
-            calculated_trade_qty = math.floor(investment_amount / current_price)
+        # ------------------------------------------------------------------
+        # RULE: Do NOT take a new trade until previous trade is exited
+        # ------------------------------------------------------------------
+        new_trade_allowed = (position == 0)
 
-        # --------------------------------------------------------------------------------
-        # VWAP FILTER (0.5%)
-        # BUY allowed when near VWAP (<=0.5%) or above VWAP
-        # SELL allowed when near VWAP (<=0.5%) or below VWAP
-        # --------------------------------------------------------------------------------
+        # ------------------------------------------------------------------
+        # VWAP FILTER
+        # ------------------------------------------------------------------
         vwap = df.loc[i, 'vwap'] if 'vwap' in df.columns else None
-        allow_buy = True
-        allow_sell = True
+        allow_buy = allow_sell = True
 
         if vwap and vwap > 0:
             diff_pct = abs(current_price - vwap) / vwap * 100
-
             allow_buy = (diff_pct <= 0.5) or (current_price > vwap)
             allow_sell = (diff_pct <= 0.5) or (current_price < vwap)
 
-        # --------------------------------------------------------------------------------
-        # BUY LOGIC WITH VWAP FILTER
-        # --------------------------------------------------------------------------------
-        if signal_prev_day == 'BUY' and allow_buy:
-            if ltn_prev_day > stn_prev_day:
+        # ------------------------------------------------------------------
+        # BUY LOGIC
+        # ------------------------------------------------------------------
+        if signal_prev == 'BUY' and allow_buy and new_trade_allowed:
+            if ltn_prev > stn_prev and ltn_prev > last_buy_trigger_ltn:
+                position += calculated_trade_qty
+                net_trade_qty += calculated_trade_qty
+                last_buy_trigger_ltn = ltn_prev
 
-                if position < 0:
-                    net_trade_qty = -position
-                    position = 0
-
-                if ltn_prev_day > last_buy_trigger_ltn:
-                    if position >= 0:
-                        position += calculated_trade_qty
-                        net_trade_qty += calculated_trade_qty
-
-                    last_buy_trigger_ltn = ltn_prev_day
-
-        # --------------------------------------------------------------------------------
-        # SELL LOGIC WITH VWAP FILTER
-        # --------------------------------------------------------------------------------
-        elif signal_prev_day == 'SELL' and allow_sell:
-            if stn_prev_day > ltn_prev_day:
-
-                if position > 0:
-                    net_trade_qty = -position
-                    position = 0
-
-                if stn_prev_day > last_sell_trigger_stn:
-                    if position <= 0:
-                        position -= calculated_trade_qty
-                        net_trade_qty -= calculated_trade_qty
-
-                    last_sell_trigger_stn = stn_prev_day
+        # ------------------------------------------------------------------
+        # SELL LOGIC
+        # ------------------------------------------------------------------
+        elif signal_prev == 'SELL' and allow_sell and new_trade_allowed:
+            if stn_prev > ltn_prev and stn_prev > last_sell_trigger_stn:
+                position -= calculated_trade_qty
+                net_trade_qty -= calculated_trade_qty
+                last_sell_trigger_stn = stn_prev
 
         df.loc[i, 'Quantity_Traded'] = net_trade_qty
         df.loc[i, 'Position'] = position
@@ -220,50 +196,39 @@ def simulate_trades(df, investment_amount):
 # MAIN PIPELINE
 # ------------------------------------------------------------------------------------
 def run_pipeline():
-    print(f"--- F&O Trade Strategy Backtester & Plotter ---")
+    print(f"--- F&O Trade Strategy Backtester ---")
     print(f"Input Data: {INPUT_FILE}")
 
     if not os.path.exists(INPUT_FILE):
-        print(f"Error: Input file not found: {INPUT_FILE}")
+        print(f"ERROR: Input file not found.")
         return
 
-    try:
-        df = pd.read_csv(INPUT_FILE, thousands=',')
-    except Exception as e:
-        print(f"Error reading CSV file: {e}")
+    df = pd.read_csv(INPUT_FILE, thousands=',')
+
+    df_clean = clean_data(df.copy())
+    if df_clean.empty:
+        print("ERROR: Data empty after cleaning.")
         return
 
-    try:
-        df_cleaned = clean_data(df.copy())
+    min_oi = calculate_dynamic_min_oi(df_clean)
+    if min_oi == 0:
+        print("ERROR: OI threshold invalid.")
+        return
 
-        if df_cleaned.empty:
-            print("Error: DataFrame empty after cleaning.")
-            return
+    df_signals = generate_signals(df_clean, DIFFERENCE_THRESHOLD_PCT, min_oi)
+    df_trades = simulate_trades(df_signals, INVESTMENT_AMOUNT)
 
-        MINIMUM_OI_SUM = calculate_dynamic_min_oi(df_cleaned)
-        if MINIMUM_OI_SUM == 0:
-            print("Error: Dynamic minimum OI is zero.")
-            return
+    output_cols = [
+        DATE_COL, CLOSE_COL, 'vwap',
+        LONG_TILL_NOW_COL, SHORT_TILL_NOW_COL,
+        OI_SUM_COL, 'Net_Position_Change', 'Signal_Threshold_Value',
+        'Signal', 'Quantity_Traded', 'Position', 'Daily_PnL', 'Cumulative_PnL'
+    ]
 
-        df_signals = generate_signals(df_cleaned, DIFFERENCE_THRESHOLD_PCT, MINIMUM_OI_SUM)
-        df_trades = simulate_trades(df_signals, INVESTMENT_AMOUNT)
+    df_trades[[c for c in output_cols if c in df_trades.columns]].to_csv(OUTPUT_FILE, index=False)
 
-        output_cols = [
-            DATE_COL, CLOSE_COL, 'vwap',
-            LONG_TILL_NOW_COL, SHORT_TILL_NOW_COL,
-            OI_SUM_COL, 'Net_Position_Change', 'Signal_Threshold_Value',
-            'Signal', 'Quantity_Traded', 'Position', 'Daily_PnL', 'Cumulative_PnL'
-        ]
-
-        final_output = df_trades[[c for c in output_cols if c in df_trades.columns]]
-        final_output.to_csv(OUTPUT_FILE, index=False)
-
-        print(f"\nSaved trade file: {OUTPUT_FILE}")
-        print(f"Total trading days: {len(final_output)}")
-        print(f"Final PnL: {final_output['Cumulative_PnL'].iloc[-1]:,.2f}")
-
-    except Exception as e:
-        print(f"Unexpected error: {e}")
+    print(f"\nSaved trade file: {OUTPUT_FILE}")
+    print(f"Final PnL: {df_trades['Cumulative_PnL'].iloc[-1]:,.2f}")
 
 
 if __name__ == "__main__":
