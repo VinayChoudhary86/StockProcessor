@@ -63,18 +63,20 @@ def run_plotting():
         df['High'] = df[[CLOSE_COL, 'Open']].max(axis=1) * (1 + range_pct)
         df['Low'] = df[[CLOSE_COL, 'Open']].min(axis=1) * (1 - range_pct)
 
-        # Candlestick with hover text including P&L
+        # Hover text with color-coded P&L
         hover_text = [
             f"Date: {row[DATE_COL].strftime('%Y-%m-%d')}<br>"
+            f"<span style='color:{'lime' if row['Cumulative_PnL'] >= 0 else 'red'}'>"
+            f"Cumulative P&L: {row['Cumulative_PnL']:,.2f}</span><br>"
             f"Open: {row['Open']:.2f}<br>"
             f"High: {row['High']:.2f}<br>"
             f"Low: {row['Low']:.2f}<br>"
             f"Close: {row[CLOSE_COL]:.2f}<br>"
             f"Net Qty: {row['Net_Qty']}<br>"
-            f"Cumulative P&L: {row['Cumulative_PnL']:.2f}"
             for _, row in df.iterrows()
         ]
 
+        # Candlestick
         candlestick = go.Candlestick(
             x=df[DATE_COL],
             open=df['Open'],
@@ -105,7 +107,8 @@ def run_plotting():
             marker=dict(size=12, color='white', symbol='triangle-up'),
             name='BUY',
             hoverinfo='text',
-            hovertext=buy_trades.apply(lambda row: f"BUY @ {row[CLOSE_COL]:.2f}<br>Net Qty: {row['Net_Qty']}", axis=1)
+            hovertext=buy_trades.apply(lambda row:
+                f"BUY @ {row[CLOSE_COL]:.2f}<br>Net Qty: {row['Net_Qty']}", axis=1)
         )
 
         sell_marker = go.Scatter(
@@ -114,7 +117,8 @@ def run_plotting():
             marker=dict(size=12, color='orange', symbol='triangle-down'),
             name='SELL',
             hoverinfo='text',
-            hovertext=sell_trades.apply(lambda row: f"SELL @ {row[CLOSE_COL]:.2f}<br>Net Qty: {row['Net_Qty']}", axis=1)
+            hovertext=sell_trades.apply(lambda row:
+                f"SELL @ {row[CLOSE_COL]:.2f}<br>Net Qty: {row['Net_Qty']}", axis=1)
         )
 
         # Horizontal lines with net quantity labels
@@ -157,7 +161,8 @@ def run_plotting():
         )
 
         fig = go.Figure(
-            data=[candlestick, ema9_line, ema21_line, ema50_line, vwap_line, buy_marker, sell_marker] + buy_lines + sell_lines,
+            data=[candlestick, ema9_line, ema21_line, ema50_line, vwap_line,
+                  buy_marker, sell_marker] + buy_lines + sell_lines,
             layout=layout
         )
 
@@ -168,9 +173,9 @@ def run_plotting():
         fig.add_annotation(
             x=df[DATE_COL].iloc[-1],
             y=df[CLOSE_COL].max() * 1.05,
-            text=f"Cumulative P&L: {final_pnl:.2f}",
+            text=f"Cumulative P&L: {final_pnl:,.2f}",
             showarrow=False,
-            font=dict(size=16, color=pnl_color),
+            font=dict(size=18, color=pnl_color),
             xanchor='right',
             yanchor='bottom'
         )
