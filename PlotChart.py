@@ -60,10 +60,10 @@ def run_plotting():
         # Approximate OHLC
         df['Open'] = df[CLOSE_COL].shift(1).fillna(df[CLOSE_COL].iloc[0])
         range_pct = 0.005
-        df['High'] = df[[CLOSE_COL, 'Open']].max(axis=1) * (1 + range_pct)
-        df['Low'] = df[[CLOSE_COL, 'Open']].min(axis=1) * (1 - range_pct)
+        df['High'] = df[['Open', CLOSE_COL]].max(axis=1) * (1 + range_pct)
+        df['Low'] = df[['Open', CLOSE_COL]].min(axis=1) * (1 - range_pct)
 
-        # Hover text with color-coded P&L
+        # Hover text
         hover_text = [
             f"Date: {row[DATE_COL].strftime('%Y-%m-%d')}<br>"
             f"<span style='color:{'lime' if row['Cumulative_PnL'] >= 0 else 'red'}'>"
@@ -88,27 +88,32 @@ def run_plotting():
             hoverinfo='text'
         )
 
-        # EMA Lines
-        ema9_line = go.Scatter(x=df[DATE_COL], y=df["EMA_9"], mode='lines', name='EMA 9', line=dict(width=1.2, color='yellow'))
-        ema21_line = go.Scatter(x=df[DATE_COL], y=df["EMA_21"], mode='lines', name='EMA 21', line=dict(width=1.2, color='cyan'))
-        ema50_line = go.Scatter(x=df[DATE_COL], y=df["EMA_50"], mode='lines', name='EMA 50', line=dict(width=1.2, color='magenta'))
+        # EMA lines
+        ema9_line = go.Scatter(x=df[DATE_COL], y=df["EMA_9"], mode='lines',
+                               name='EMA 9', line=dict(width=1.2, color='yellow'))
 
-        # VWAP Line
-        vwap_line = go.Scatter(x=df[DATE_COL], y=df[VWAP_COL], mode='lines', name='VWAP', line=dict(width=1.5, color='orange'))
+        ema21_line = go.Scatter(x=df[DATE_COL], y=df["EMA_21"], mode='lines',
+                                name='EMA 21', line=dict(width=1.2, color='cyan'))
 
-        # BUY / SELL trades
-        buy_trades = df[df[QUANTITY_TRADED_COL] > 0].copy()
-        sell_trades = df[df[QUANTITY_TRADED_COL] < 0].copy()
+        ema50_line = go.Scatter(x=df[DATE_COL], y=df["EMA_50"], mode='lines',
+                                name='EMA 50', line=dict(width=1.2, color='magenta'))
 
-        # Markers
+        # VWAP
+        vwap_line = go.Scatter(x=df[DATE_COL], y=df[VWAP_COL], mode='lines',
+                               name='VWAP', line=dict(width=1.5, color='orange'))
+
+        # BUY / SELL markers
+        buy_trades = df[df[QUANTITY_TRADED_COL] > 0]
+        sell_trades = df[df[QUANTITY_TRADED_COL] < 0]
+
         buy_marker = go.Scatter(
             x=buy_trades[DATE_COL], y=buy_trades[CLOSE_COL],
             mode='markers',
             marker=dict(size=12, color='white', symbol='triangle-up'),
             name='BUY',
             hoverinfo='text',
-            hovertext=buy_trades.apply(lambda row:
-                f"BUY @ {row[CLOSE_COL]:.2f}<br>Net Qty: {row['Net_Qty']}", axis=1)
+            hovertext=buy_trades.apply(
+                lambda row: f"BUY @ {row[CLOSE_COL]:.2f}<br>Net Qty: {row['Net_Qty']}", axis=1)
         )
 
         sell_marker = go.Scatter(
@@ -117,56 +122,33 @@ def run_plotting():
             marker=dict(size=12, color='orange', symbol='triangle-down'),
             name='SELL',
             hoverinfo='text',
-            hovertext=sell_trades.apply(lambda row:
-                f"SELL @ {row[CLOSE_COL]:.2f}<br>Net Qty: {row['Net_Qty']}", axis=1)
+            hovertext=sell_trades.apply(
+                lambda row: f"SELL @ {row[CLOSE_COL]:.2f}<br>Net Qty: {row['Net_Qty']}", axis=1)
         )
 
-        # Horizontal lines with net quantity labels
-        buy_lines = []
-        sell_lines = []
-
-        for _, row in df.iterrows():
-            if row[QUANTITY_TRADED_COL] > 0:
-                buy_lines.append(
-                    go.Scatter(
-                        x=[df[DATE_COL].min(), df[DATE_COL].max()],
-                        y=[row[CLOSE_COL], row[CLOSE_COL]],
-                        mode='lines+text',
-                        line=dict(color='lime', width=1.2, dash='dot'),
-                        text=[f"Net {int(row['Net_Qty'])}", ""],
-                        textposition="top left",
-                        showlegend=False
-                    )
-                )
-            elif row[QUANTITY_TRADED_COL] < 0:
-                sell_lines.append(
-                    go.Scatter(
-                        x=[df[DATE_COL].min(), df[DATE_COL].max()],
-                        y=[row[CLOSE_COL], row[CLOSE_COL]],
-                        mode='lines+text',
-                        line=dict(color='red', width=1.2, dash='dot'),
-                        text=[f"Net {int(row['Net_Qty'])}", ""],
-                        textposition="bottom left",
-                        showlegend=False
-                    )
-                )
-
+        # Layout with panning enabled
         layout = go.Layout(
             title=f'Interactive Chart: {os.path.basename(INPUT_FILE)}',
             xaxis=dict(title='Date', rangeslider_visible=False, showspikes=True),
             yaxis=dict(title='Price (INR)', showspikes=True),
             template='plotly_dark',
             height=950,
-            hovermode='x unified'
+            hovermode='x unified',
+
+            # ⭐ ENABLE CLICK-AND-DRAG PANNING ⭐
+            dragmode='pan'
         )
 
+        # Figure
         fig = go.Figure(
-            data=[candlestick, ema9_line, ema21_line, ema50_line, vwap_line,
-                  buy_marker, sell_marker] + buy_lines + sell_lines,
+            data=[
+                candlestick, ema9_line, ema21_line, ema50_line,
+                vwap_line, buy_marker, sell_marker
+            ],
             layout=layout
         )
 
-        # Add cumulative P&L annotation at top
+        # Cumulative P&L annotation
         final_pnl = df['Cumulative_PnL'].iloc[-1]
         pnl_color = 'lime' if final_pnl >= 0 else 'red'
 
@@ -180,11 +162,25 @@ def run_plotting():
             yanchor='bottom'
         )
 
-        # Save and open chart automatically
-        plot(fig,
-             filename=OUTPUT_INTERACTIVE_CHART_FILE,
-             auto_open=True,
-             config={'displayModeBar': True}
+        # Save chart with drawing tools + panning
+        plot(
+            fig,
+            filename=OUTPUT_INTERACTIVE_CHART_FILE,
+            auto_open=True,
+            config={
+                'displayModeBar': True,
+                'scrollZoom': True,
+
+                # ⭐ ENABLE DRAWING TOOLS ⭐
+                'modeBarButtonsToAdd': [
+                    'drawline',
+                    'drawopenpath',
+                    'drawclosedpath',
+                    'drawcircle',
+                    'drawrect',
+                    'eraseshape'
+                ]
+            }
         )
 
         print(f"\nChart generated successfully:\n{OUTPUT_INTERACTIVE_CHART_FILE}")
