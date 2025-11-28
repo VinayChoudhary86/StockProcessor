@@ -1,11 +1,10 @@
-# NSE34.py
+# ProcessData.py
 """
-NSE_process_with_config.py
-
+NSE_process_with_config.py (renamed / patched)
 Full script: reads TARGET_DIRECTORY, SD_MULTIPLIER, and SYMBOL 
-from configProcess.ini (via config_loader) and runs the analysis pipeline, 
-aggregating equity files starting with "Quote-Equity-" and delivery files 
-ending with "-EQ-N.csv".
+from configProcess.ini (via config_loader) and runs the analysis pipeline,
+aggregating equity files and delivery/FAO files, computing metrics,
+and training/applying an ML pipeline to predict Longs/Shorts buildup.
 """
 
 import os
@@ -13,27 +12,24 @@ import glob
 import warnings
 import numpy as np
 import pandas as pd
+from sklearn.model_selection import train_test_split, KFold, cross_val_score
 
 # Assuming config_loader is in the same directory or accessible via PYTHONPATH
 from config_loader import load_config # type: ignore
+from sklearn.preprocessing import StandardScaler # Added import for clarity
 
 # Load shared config ONCE
-# Note: EQUITY_FILE_NAME and DELIVERY_FILE_NAME from config are now ignored 
-# in the main processing function but must still be loaded if they exist 
-# in the config for consistency, though they won't be used for file reading.
 cfg = load_config()
 
-TARGET_DIRECTORY = cfg["TARGET_DIRECTORY"]
-EQUITY_FILE_NAME = cfg["EQUITY_FILE_NAME"] # Loaded but ignored in process_analysis_data
-DELIVERY_FILE_NAME = cfg["DELIVERY_FILE_NAME"] # Loaded but ignored in process_analysis_data
-SD_MULTIPLIER = cfg["SD_MULTIPLIER"]
-TRADING_QTY = cfg["TRADING_QTY"]
-SYMBOL = cfg["SYMBOL"]
+TARGET_DIRECTORY = cfg.get("TARGET_DIRECTORY")
+EQUITY_FILE_NAME = cfg.get("EQUITY_FILE_NAME") # Loaded but may be ignored
+DELIVERY_FILE_NAME = cfg.get("DELIVERY_FILE_NAME") # Loaded but may be ignored
+SD_MULTIPLIER = float(cfg.get("SD_MULTIPLIER", 1.0))
+TRADING_QTY = cfg.get("TRADING_QTY", 0)
+SYMBOL = cfg.get("SYMBOL", "SYMBOL")
 
-print("Using configuration (Note: EQUITY_FILE_NAME and DELIVERY_FILE_NAME are overwritten by patterns):")
+print("Using configuration (Note: EQUITY_FILE_NAME and DELIVERY_FILE_NAME may be overwritten by patterns):")
 print(" TARGET_DIRECTORY =", TARGET_DIRECTORY)
-# print(" EQUITY_FILE_NAME (Config value) =", EQUITY_FILE_NAME)
-# print(" DELIVERY_FILE_NAME (Config value) =", DELIVERY_FILE_NAME)
 print(" SD_MULTIPLIER =", SD_MULTIPLIER)
 print(" TRADING_QTY =", TRADING_QTY)
 print(" SYMBOL =", SYMBOL)
@@ -50,7 +46,7 @@ PRICE_CHANGE_COL = '~Price'
 OI_CHANGE_COL = '~OI'
 DATE_COL_CANDIDATES = ['DATE', 'DATE_', 'TRADING_DATE', 'TRADE_DATE', 'TIMESTAMP', 'DATES', 'Date']
 
-# ------------------------- MATRIX MAPPING ------------------------------
+# ------------------------- MATRIX MAPPING (kept for fallback/explainability) --------------
 MATRIX_MAPPING = {
     (1,1,1): ('StrongLong','BUY'),
     (1,1,0): ('LastLegOfLong','WEAK_BUY'),
@@ -90,6 +86,16 @@ def _clean_dataframe(df, date_col_candidates, date_col_name='DATE', dayfirst=Tru
         df.dropna(subset=[date_col_name], inplace=True)
     return df
 
+# --- FIX: Robust Conversion Function ---
+def robust_to_numeric(series):
+    """
+    Converts series data by stripping commas and coercing to numeric, handling errors.
+    This is the core fix for 'ValueError: could not convert string to float: "13,594.83"'.
+    """
+    return pd.to_numeric(series.astype(str).str.replace(',', '', regex=False), errors='coerce') 
+# ----------------------------------------
+
+
 # ------------------ DIRECTIONAL SIGNAL UTILITY -------------------------
 def get_directional_signal_with_sd(series_change, sd_multiplier):
     """
@@ -117,10 +123,8 @@ def get_directional_signal_with_sd(series_change, sd_multiplier):
 def process_analysis_data(target_directory, sd_multiplier=SD_MULTIPLIER, trading_qty=TRADING_QTY):
     """
     Aggregates data from multiple files based on patterns, cleans, 
-    computes metrics, and saves analysis CSV/Excel.
-    
-    NOTE: EQUITY_FILE_NAME and DELIVERY_FILE_NAME from config are ignored 
-          in favor of file name patterns.
+    computes metrics, trains ML models (Option D) to predict Longs/Shorts
+    and saves analysis CSV/Excel.
     """
     print("--- 1. Starting Data Processing and Calculation (Aggregating Files) ---")
 
@@ -207,13 +211,12 @@ def process_analysis_data(target_directory, sd_multiplier=SD_MULTIPLIER, trading
             master_df = pd.concat(list_of_dataframes, ignore_index=True)
             fao_id_cols = ['DATE','EXPIRY_DATE','OPTION_TYPE','STRIKE_PRICE']
             cols_for_dedup = [c for c in fao_id_cols if c in master_df.columns]
+            
+            # FIX: Use robust_to_numeric for F&O volume/OI
             for col in ['Volume','OPEN_INTEREST']:
                 if col in master_df.columns:
-                    cleaned = (master_df[col].astype(str)
-                                 .str.replace(',', '', regex=False)
-                                 .str.replace(r'[^\d\.\-]', '', regex=True)
-                                 .str.strip())
-                    master_df[col] = pd.to_numeric(cleaned, errors='coerce').fillna(0)
+                    master_df[col] = robust_to_numeric(master_df[col]).fillna(0)
+                    
             if len(cols_for_dedup) == 4:
                 master_df.drop_duplicates(subset=cols_for_dedup, keep='first', inplace=True)
             if 'DATE' in master_df.columns:
@@ -221,7 +224,6 @@ def process_analysis_data(target_directory, sd_multiplier=SD_MULTIPLIER, trading
                 aggregated_fao_df.rename(columns={'Volume':'Daily_F&O_Volume_Sum','OPEN_INTEREST':'Daily_Open_Interest_Sum'}, inplace=True)
     
     # --- 1.4 Merge and Compute Metrics ---
-
     final_df = equity_df.merge(aggregated_fao_df, on='DATE', how='left')
     final_df = final_df.merge(delivery_df, on='DATE', how='left')
 
@@ -248,46 +250,28 @@ def process_analysis_data(target_directory, sd_multiplier=SD_MULTIPLIER, trading
             raise KeyError("Close price column not found in equity file. Expected 'close' or similar.")
 
     # =========================================================================
-    # FIX START: Robust Numeric Conversion for Close Price (Fixes ValueError: '-' and previous TypeError)
+    # FIX: Robust Numeric Conversion for core raw columns
     # =========================================================================
-    # Step 1: Clean known non-numeric chars like commas, and remove other non-digit/decimal/minus chars
-    cleaned_prices = (
-        final_df[EQUITY_CLOSE_PRICE_COL].astype(str)
-        .str.replace(',', '', regex=False)
-        .str.replace(r'[^\d\.\-]', '', regex=True) 
-        .str.strip() # Remove any leading/trailing whitespace
-    )
-    # Step 2: Use pd.to_numeric to safely convert, coercing unconvertible strings (like '-') to NaN
-    final_df[EQUITY_CLOSE_PRICE_COL] = pd.to_numeric(cleaned_prices, errors='coerce')
-    # Step 3: Fill NaN values (including the coerced '-') with 0
-    final_df[EQUITY_CLOSE_PRICE_COL] = final_df[EQUITY_CLOSE_PRICE_COL].fillna(0)
-    # =========================================================================
-    # FIX END
-    # =========================================================================
+    # 1. Close Price
+    final_df[EQUITY_CLOSE_PRICE_COL] = robust_to_numeric(final_df[EQUITY_CLOSE_PRICE_COL])
+    # FIX: Replaced .fillna(method='ffill') with .ffill().fillna(0)
+    final_df[EQUITY_CLOSE_PRICE_COL] = final_df[EQUITY_CLOSE_PRICE_COL].ffill().fillna(0) # Line 257
 
+    # 2. VWAP
+    final_df[VWAP_COL] = robust_to_numeric(final_df[VWAP_COL])
+    # FIX: Replaced .fillna(method='ffill') with .ffill().fillna(0)
+    final_df[VWAP_COL] = final_df[VWAP_COL].ffill().fillna(0) # Line 261
+    
+    # 3. Delivery Quantity
+    final_df[DELIVERY_QTY_FINAL_COL] = robust_to_numeric(final_df[DELIVERY_QTY_FINAL_COL]).fillna(0)
+    
+    # NOTE: The explicit cleaning for F&O volume/OI was done in section 1.3
 
     prev_close = final_df[EQUITY_CLOSE_PRICE_COL].shift(1)
     final_df['Price_Pct_Change'] = ((final_df[EQUITY_CLOSE_PRICE_COL] - prev_close) / prev_close.replace(0,np.nan)) * 100
 
-    delivery_qty_cleaned = (
-        final_df[DELIVERY_QTY_FINAL_COL].astype(str)
-        .str.replace(',', '', regex=False)
-        .str.replace(r'[^\d\.\-]', '', regex=True)
-        .replace('', '0')
-        .astype(float)
-        .fillna(0)
-    )
-
-    vwap_cleaned = (
-        final_df[VWAP_COL].astype(str)
-        .str.replace(',', '', regex=False)
-        .str.replace(r'[^\d\.\-]', '', regex=True)
-        .replace('', '0')
-        .astype(float)
-        .fillna(0)
-    )
-
-    final_df['Del_Inter'] = delivery_qty_cleaned * vwap_cleaned
+    # Simplify Del_Inter calculation using the now-numeric columns
+    final_df['Del_Inter'] = final_df[DELIVERY_QTY_FINAL_COL] * final_df[VWAP_COL]
     final_df[DELIVERY_VALUE_COL] = final_df['Del_Inter'] / 10000000.0
 
     prev_oi = final_df['Daily_Open_Interest_Sum'].shift(1)
@@ -313,7 +297,7 @@ def process_analysis_data(target_directory, sd_multiplier=SD_MULTIPLIER, trading
 
     final_df.rename(columns={'Price_Pct_Change': PRICE_CHANGE_COL, 'OI_Pct_Change': OI_CHANGE_COL}, inplace=True)
 
-    # Directional Signals
+    # Directional Signals (existing SD-based dirs, preserved for features & fallback)
     price_series = final_df[PRICE_CHANGE_COL].fillna(0)
     del_series = final_df[REL_DELIVERY_COL].fillna(0)
     oi_series = final_df[OI_CHANGE_COL].fillna(0)
@@ -334,29 +318,238 @@ def process_analysis_data(target_directory, sd_multiplier=SD_MULTIPLIER, trading
     final_df['F&O_Conclusion'] = mapped.apply(lambda t: t[0])
     final_df['Trade_Signal'] = mapped.apply(lambda t: t[1])
 
-    # ------------------ NEW LONGS / SHORTS LOGIC (BASED ON F&O_Conclusion) ------------------
-    final_df['Longs'] = 0
-    final_df['Shorts'] = 0
+    # ------------------ START: MACHINE-LEARNING LONGS/SHORTS (Option D) ------------------
+    # Requirements: scikit-learn, joblib. Optional: xgboost for better performance.
+    try:
+        from sklearn.model_selection import train_test_split
+        from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
+        from sklearn.metrics import classification_report, mean_absolute_error
+        # StandardScaler is already imported
+        import joblib
+        try:
+            from xgboost import XGBClassifier, XGBRegressor  # optional, faster/more performant
+            XGB_AVAILABLE = True
+        except Exception:
+            XGB_AVAILABLE = False
+    except Exception as e:
+        # If sklearn/joblib not installed, gracefully fallback to rule-based logic
+        print("sklearn or joblib not available:", e)
+        XGB_AVAILABLE = False
+        # Fallback simple logic (same as original)
+        final_df['Longs'] = 0
+        final_df['Shorts'] = 0
+        long_conditions = ["NewLongs", "LongCovering", "StrongLong", "LastLegOfLong"]
+        short_conditions = ["NewShort", "ShortCovering", "StrongShort", "LastLegOfshort"] 
+        final_df.loc[final_df['F&O_Conclusion'].isin(long_conditions), 'Longs'] = final_df['Absolute_OI_Change']
+        final_df.loc[final_df['F&O_Conclusion'].isin(short_conditions), 'Shorts'] = final_df['Absolute_OI_Change']
+        final_df['Longs'] = final_df['Longs'].fillna(0)
+        final_df['Shorts'] = final_df['Shorts'].fillna(0)
+        final_df['Longs Till Now'] = final_df['Longs'].cumsum()
+        final_df['Shorts Till Now'] = final_df['Shorts'].cumsum()
+    else:
+        # ML hyperparameters (tweak these as required)
+        FUTURE_DAYS = int(cfg.get("ML_FUTURE_DAYS", 3))        # N: predict OI/returns over next N days
+        RETURN_THRESHOLD = float(cfg.get("ML_RETURN_THRESHOLD", 0.01))  # 1% future return threshold for label creation
+        OI_QUANTILE = float(cfg.get("ML_OI_QUANTILE", 0.6))      # percentile to choose OI change threshold
+        MIN_TRAIN_ROWS = int(cfg.get("ML_MIN_TRAIN_ROWS", 200))   # min historical rows needed to train a model
+        RANDOM_STATE = int(cfg.get("ML_RANDOM_STATE", 42))
 
-    long_conditions = ["NewLongs", "LongCovering", "StrongLong", "LastLegOfLong"]
-    short_conditions = ["NewShort", "ShortCovering", "StrongShort", "LastLegOfshort"] 
+        # Prepare a copy for ML preparation
+        ml_df = final_df.copy()
 
-    # Calculate net change in Open Interest only for the relevant conclusions
-    final_df.loc[final_df['F&O_Conclusion'].isin(long_conditions), 'Longs'] = \
-        final_df['Absolute_OI_Change']
+        # Ensure necessary numeric columns exist
+        for c in [EQUITY_CLOSE_PRICE_COL, 'Daily_Open_Interest_Sum', 'Absolute_OI_Change', DELIVERY_VALUE_COL, NEW_5DAD_COL, REL_DELIVERY_COL]:
+            if c not in ml_df.columns:
+                ml_df[c] = 0.0
 
-    final_df.loc[final_df['F&O_Conclusion'].isin(short_conditions), 'Shorts'] = \
-        final_df['Absolute_OI_Change']
+        # Create future targets
+        ml_df['future_close'] = ml_df[EQUITY_CLOSE_PRICE_COL].shift(-FUTURE_DAYS)
+        ml_df['future_oi'] = ml_df['Daily_Open_Interest_Sum'].shift(-FUTURE_DAYS)
 
-    final_df['Longs'] = final_df['Longs'].fillna(0)
-    final_df['Shorts'] = final_df['Shorts'].fillna(0)
+        ml_df['future_return_pct'] = ((ml_df['future_close'] - ml_df[EQUITY_CLOSE_PRICE_COL]) / ml_df[EQUITY_CLOSE_PRICE_COL]).replace([np.inf, -np.inf], np.nan)
+        ml_df['future_oi_change'] = (ml_df['future_oi'] - ml_df['Daily_Open_Interest_Sum'])
 
-    final_df['Longs Till Now'] = final_df['Longs'].cumsum()
-    final_df['Shorts Till Now'] = final_df['Shorts'].cumsum()
-    
+        # Drop rows without future info (they can't be labeled)
+        ml_df_labels = ml_df.dropna(subset=['future_return_pct', 'future_oi_change']).copy()
+
+        # Build OI threshold for label creation using positive future OI changes' quantile
+        positive_future_oi = ml_df_labels.loc[ml_df_labels['future_oi_change'] > 0, 'future_oi_change']
+        if len(positive_future_oi) > 0:
+            oi_thresh = positive_future_oi.quantile(OI_QUANTILE)
+        else:
+            oi_thresh = ml_df_labels['future_oi_change'].median() if len(ml_df_labels) > 0 else 0.0
+
+        # Create multiclass label:
+        # 1 => Long buildup (future_oi_change > oi_thresh AND future_return_pct > RETURN_THRESHOLD)
+        # -1 => Short buildup (future_oi_change > oi_thresh AND future_return_pct < -RETURN_THRESHOLD)
+        # 0 => otherwise
+        def create_label(row):
+            if row['future_oi_change'] > oi_thresh:
+                if row['future_return_pct'] > RETURN_THRESHOLD:
+                    return 1
+                if row['future_return_pct'] < -RETURN_THRESHOLD:
+                    return -1
+            return 0
+
+        if len(ml_df_labels) == 0:
+            # No labels available: fallback to rule-based
+            print("ML: No rows available for label construction. Falling back to rule-based Longs/Shorts.")
+            final_df['Longs'] = 0
+            final_df['Shorts'] = 0
+            long_conditions = ["NewLongs", "LongCovering", "StrongLong", "LastLegOfLong"]
+            short_conditions = ["NewShort", "ShortCovering", "StrongShort", "LastLegOfshort"] 
+            final_df.loc[final_df['F&O_Conclusion'].isin(long_conditions), 'Longs'] = final_df['Absolute_OI_Change']
+            final_df.loc[final_df['F&O_Conclusion'].isin(short_conditions), 'Shorts'] = final_df['Absolute_OI_Change']
+            final_df['Longs'] = final_df['Longs'].fillna(0)
+            final_df['Shorts'] = final_df['Shorts'].fillna(0)
+            final_df['Longs Till Now'] = final_df['Longs'].cumsum()
+            final_df['Shorts Till Now'] = final_df['Shorts'].cumsum()
+        else:
+            ml_df_labels['ML_Label'] = ml_df_labels.apply(create_label, axis=1)
+
+            # Features for the classifier/regressor
+            feature_cols = [
+                PRICE_CHANGE_COL, REL_DELIVERY_COL, OI_CHANGE_COL, 'Absolute_OI_Change',
+                DELIVERY_VALUE_COL, NEW_5DAD_COL, VWAP_COL
+            ]
+            # Ensure feature columns exist
+            for f in feature_cols:
+                if f not in ml_df_labels.columns:
+                    ml_df_labels[f] = 0.0
+
+            X = ml_df_labels[feature_cols].fillna(0)
+            y = ml_df_labels['ML_Label']
+
+            # If not enough labeled examples to train, fall back to existing simple logic
+            if len(ml_df_labels) < MIN_TRAIN_ROWS or y.nunique() == 1:
+                print("ML training skipped (not enough data or single-class labels). Using rule-based Longs/Shorts.")
+                final_df['Longs'] = 0
+                final_df['Shorts'] = 0
+                long_conditions = ["NewLongs", "LongCovering", "StrongLong", "LastLegOfLong"]
+                short_conditions = ["NewShort", "ShortCovering", "StrongShort", "LastLegOfshort"] 
+                final_df.loc[final_df['F&O_Conclusion'].isin(long_conditions), 'Longs'] = final_df['Absolute_OI_Change']
+                final_df.loc[final_df['F&O_Conclusion'].isin(short_conditions), 'Shorts'] = final_df['Absolute_OI_Change']
+                final_df['Longs'] = final_df['Longs'].fillna(0)
+                final_df['Shorts'] = final_df['Shorts'].fillna(0)
+                final_df['Longs Till Now'] = final_df['Longs'].cumsum()
+                final_df['Shorts Till Now'] = final_df['Shorts'].cumsum()
+            else:
+                # Standardize features
+                scaler = StandardScaler()
+                
+                # The data going into X is now guaranteed to be numeric due to the fix earlier.
+                X_scaled = scaler.fit_transform(X) # <-- This line should now succeed
+                
+                # FIX for XGBoost: Remap classes [-1, 0, 1] to [0, 1, 2]
+                y_mapped = y.copy().replace({-1: 0, 0: 1, 1: 2})
+                
+                # Split the mapped data
+                X_train, X_test, y_train, y_test = train_test_split(X_scaled, y_mapped, test_size=0.2, random_state=RANDOM_STATE, stratify=y_mapped)
+                
+                # Train classifier
+                if XGB_AVAILABLE:
+                    # n_estimators=100 is default; keeping it concise
+                    clf = XGBClassifier(use_label_encoder=False, eval_metric='mlogloss', random_state=RANDOM_STATE) 
+                else:
+                    clf = RandomForestClassifier(n_estimators=200, random_state=RANDOM_STATE, n_jobs=-1)
+
+                clf.fit(X_train, y_train)
+
+                # Predict and report (y_test needs to be reversed-mapped for classification_report)
+                y_pred = clf.predict(X_test)
+                y_pred_unmapped = pd.Series(y_pred).replace({0: -1, 1: 0, 2: 1}).values
+                y_test_unmapped = y_test.copy().replace({0: -1, 1: 0, 2: 1}).values
+                
+                try:
+                    # Use the unmapped labels for accurate reporting
+                    print("ML classifier report:\n", classification_report(y_test_unmapped, y_pred_unmapped, zero_division=0))
+                except Exception:
+                    pass
+
+                # Train regressors for magnitude prediction (only on rows where ML_Label != 0)
+                reg_features_mask = ml_df_labels['ML_Label'] != 0
+                if reg_features_mask.sum() >= 50:
+                    X_reg = scaler.transform(ml_df_labels.loc[reg_features_mask, feature_cols].fillna(0))
+                    # target is future_oi_change (magnitude)
+                    y_reg = ml_df_labels.loc[reg_features_mask, 'future_oi_change'].abs()  # magnitude only
+
+                    if XGB_AVAILABLE:
+                        reg = XGBRegressor(random_state=RANDOM_STATE, n_estimators=200)
+                    else:
+                        reg = RandomForestRegressor(n_estimators=200, random_state=RANDOM_STATE, n_jobs=-1)
+
+                    reg.fit(X_reg, y_reg)
+                    # quick MAE
+                    y_reg_pred = reg.predict(X_reg)
+                    try:
+                        print("Regressor MAE on training set:", mean_absolute_error(y_reg, y_reg_pred))
+                    except Exception:
+                        pass
+                else:
+                    reg = None
+                    print("Not enough samples to train regressors (need >=50).")
+
+                # Save models and scaler for later reuse
+                model_base = os.path.join(target_directory, f"{SYMBOL}_ml_models")
+                os.makedirs(model_base, exist_ok=True)
+                try:
+                    joblib.dump(clf, os.path.join(model_base, "ml_classifier.joblib"))
+                    joblib.dump(scaler, os.path.join(model_base, "ml_scaler.joblib"))
+                    if reg is not None:
+                        joblib.dump(reg, os.path.join(model_base, "ml_regressor.joblib"))
+                    print(f"Saved ML models to {model_base}")
+                except Exception as e:
+                    print("Warning: could not save ML models:", e)
+
+                # Apply models to full dataframe (including rows not in ml_df_labels)
+                # Need to scale features using saved scaler
+                all_X = final_df[feature_cols].fillna(0)
+                all_X_scaled = scaler.transform(all_X)
+
+                # Predict and unmap the label back to [-1, 0, 1]
+                ml_preds_mapped = clf.predict(all_X_scaled)
+                ml_preds = pd.Series(ml_preds_mapped).replace({0: -1, 1: 0, 2: 1}).values
+                
+                final_df['ML_Label'] = ml_preds
+
+                if reg is not None:
+                    pred_mags = reg.predict(all_X_scaled).clip(min=0)
+                else:
+                    # fallback magnitude = today's Absolute_OI_Change (best-guess)
+                    pred_mags = final_df['Absolute_OI_Change'].abs().fillna(0).values
+
+                # Populate Pred_Long_Value / Pred_Short_Value
+                final_df['Pred_Long_Value'] = 0.0
+                final_df['Pred_Short_Value'] = 0.0
+
+                # Map predictions to predicted magnitudes by index alignment
+                # Ensure pred_mags length aligns with final_df index length
+                if len(pred_mags) == len(final_df):
+                    final_df.loc[final_df['ML_Label'] == 1, 'Pred_Long_Value'] = pred_mags[final_df['ML_Label'] == 1]
+                    final_df.loc[final_df['ML_Label'] == -1, 'Pred_Short_Value'] = pred_mags[final_df['ML_Label'] == -1]
+                else:
+                    # safe mapping via iteration (slower but robust)
+                    for idx in final_df.index:
+                        try:
+                            mag = float(pred_mags[idx])
+                        except Exception:
+                            mag = 0.0
+                        if final_df.at[idx, 'ML_Label'] == 1:
+                            final_df.at[idx, 'Pred_Long_Value'] = mag
+                        elif final_df.at[idx, 'ML_Label'] == -1:
+                            final_df.at[idx, 'Pred_Short_Value'] = mag
+
+                # Final Longs / Shorts numeric fields (use predicted magnitudes)
+                final_df['Longs'] = final_df['Pred_Long_Value'].fillna(0)
+                final_df['Shorts'] = final_df['Pred_Short_Value'].fillna(0)
+
+                # Cumulative totals (Till Now)
+                final_df['Longs Till Now'] = final_df['Longs'].cumsum()
+                final_df['Shorts Till Now'] = final_df['Shorts'].cumsum()
+    # ------------------ END: MACHINE-LEARNING LONGS/SHORTS (Option D) ------------------
+
     # ------------------ START: Copy and format DATE column to the end ------------------
     DATE_DISPLAY_COL = 'Date Display (dd-MM-yyyy)'
-    # Format the DATE column (which is a datetime object) into the requested string format
     final_df[DATE_DISPLAY_COL] = final_df['DATE'].dt.strftime('%d-%m-%Y')
     # ------------------ END: Copy and format DATE column to the end ------------------
 
@@ -410,7 +603,6 @@ def process_analysis_data(target_directory, sd_multiplier=SD_MULTIPLIER, trading
     except Exception as e:
         print(f"Could not save styled Excel file: {e}")
 
-
     return final_df.reset_index(drop=True)
 
 # --------------------------- ENTRY POINT --------------------------------
@@ -419,12 +611,9 @@ if __name__ == "__main__":
     pd.set_option('display.width', 1400)
     pd.set_option('display.float_format', '{:.2f}'.format)
 
-    # Calling the modified function which ignores EQUITY_FILE_NAME and DELIVERY_FILE_NAME
     analysis_df = process_analysis_data(TARGET_DIRECTORY, SD_MULTIPLIER, TRADING_QTY)
 
     if analysis_df is not None and not analysis_df.empty:
         print("Analysis produced rows:", len(analysis_df))
-        # print("\nLast few rows of analysis:")
-        # print(analysis_df.tail()) # Optional: Print for verification
     else:
         print("No analysis output produced; check input files and config.")
