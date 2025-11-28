@@ -130,7 +130,8 @@ def run_plotting():
         layout = go.Layout(
             title=f'Interactive Chart: {os.path.basename(INPUT_FILE)}',
             xaxis=dict(title='Date', rangeslider_visible=False, showspikes=True),
-            yaxis=dict(title='Price (INR)', showspikes=True),
+            # fixedrange=False ensures the y-axis is not locked (from previous request)
+            yaxis=dict(title='Price (INR)', showspikes=True, fixedrange=False), 
             template='plotly_dark',
             height=950,
             hovermode='x unified',
@@ -169,7 +170,8 @@ def run_plotting():
             auto_open=True,
             config={
                 'displayModeBar': True,
-                'scrollZoom': True,
+                # CORRECTION: Set scrollZoom to True to enable scroll zoom on BOTH X and Y axes
+                'scrollZoom': True, 
 
                 # ⭐ ENABLE DRAWING TOOLS ⭐
                 'modeBarButtonsToAdd': [
