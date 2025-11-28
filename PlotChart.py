@@ -87,7 +87,7 @@ def run_plotting():
                 f"Open: {row['Open']:.2f}<br>"
                 f"High: {row['High']:.2f}<br>"
                 f"Low: {row['Low']:.2f}<br>"
-                f"Close: {row[CLOSE_COL]:.2f}<br>"     # <-- FIXED HERE
+                f"Close: {row[CLOSE_COL]:.2f}<br>"
                 f"Net Qty: {row['Net_Qty']:.0f}<br>"
             )
 
@@ -164,58 +164,90 @@ def run_plotting():
         fig.add_trace(shorts_line, row=2, col=1)
         fig.add_trace(ema5_shorts_line, row=2, col=1)
 
-        # ---------------- TRADE COLOR LINES & RIGHT-SIDE LABELS ---------------- #
-        if QUANTITY_TRADED_COL in df.columns:
-            df["Prev_Net_Qty"] = df["Net_Qty"].shift(1).fillna(0)
+        # ---------------- PAIR NUMBERING (C1 + P1 LOGIC) ---------------- #
+        df["Prev_Net_Qty"] = df["Net_Qty"].shift(1).fillna(0)
 
-            for _, row in df.iterrows():
-                qty_traded = row[QUANTITY_TRADED_COL]
-                if qty_traded == 0:
-                    continue
+        pair_id = 1
+        active_pair = None
+        active_type = None
+        entry_price = None
+        entry_time = None
 
-                price = row[CLOSE_COL]
-                prev_qty = row["Prev_Net_Qty"]
-                curr_qty = row["Net_Qty"]
+        for idx, row in df.iterrows():
+            qty_traded = row[QUANTITY_TRADED_COL]
+            prev_qty = row["Prev_Net_Qty"]
+            curr_qty = row["Net_Qty"]
 
-                if qty_traded > 0:
-                    if prev_qty < 0 and curr_qty > prev_qty:
-                        trade_type = "SHORT COVERING"
-                        color = "darkred"
-                    else:
-                        trade_type = "LONG"
-                        color = "green"
+            if qty_traded == 0:
+                continue
 
-                elif qty_traded < 0:
-                    if prev_qty > 0 and curr_qty < prev_qty:
-                        trade_type = "LONG COVERING"
-                        color = "lime"
-                    else:
-                        trade_type = "SHORT"
-                        color = "red"
+            price = row[CLOSE_COL]
 
-                fig.add_hline(
-                    y=price,
-                    line_width=1.2,
-                    line_dash="solid",
-                    line_color=color,
-                    opacity=0.75,
-                    row=1,
-                    col=1,
-                )
+            is_buy = qty_traded > 0
+            is_sell = qty_traded < 0
 
-                # ---- RIGHT-SIDE LABEL (YOUR REQUEST) ----
+            # -------- ENTRY CONDITION: position moves away from zero -------- #
+            if prev_qty == 0:
+
+                if is_buy:
+                    active_type = "LONG"
+                else:
+                    active_type = "SHORT"
+
+                active_pair = pair_id
+                entry_price = price
+                entry_time = row[DATE_COL]
+
+                # right-side label
                 fig.add_annotation(
-                    x=1.0,
-                    y=price,
-                    text=trade_type,
+                    x=1.0, y=price,
+                    text=f"{active_type} ({active_pair})",
                     showarrow=False,
-                    font=dict(size=10, color=color),
                     xanchor="left",
                     yanchor="middle",
-                    xref="paper",
-                    yref="y1",
-                    opacity=0.9,
+                    font=dict(size=10, color="green" if active_type == "LONG" else "red"),
+                    xref="paper", yref="y1"
                 )
+
+                continue
+
+            # -------- EXIT CONDITION: position returns to zero -------- #
+            if curr_qty == 0 and active_pair is not None:
+
+                cover_type = "LONG COVER" if active_type == "LONG" else "SHORT COVER"
+
+                # right-side label at exit
+                fig.add_annotation(
+                    x=1.0, y=price,
+                    text=f"{cover_type} ({active_pair})",
+                    showarrow=False,
+                    xanchor="left",
+                    yanchor="middle",
+                    font=dict(size=10, color="lime" if active_type == "LONG" else "darkred"),
+                    xref="paper", yref="y1"
+                )
+
+                # draw connecting line entry → exit
+                fig.add_shape(
+                    type="line",
+                    x0=entry_time,
+                    x1=row[DATE_COL],
+                    y0=entry_price,
+                    y1=price,
+                    xref="x1", yref="y1",
+                    line=dict(
+                        width=1.5,
+                        dash="dot",
+                        color="green" if active_type == "LONG" else "red"
+                    )
+                )
+
+                # next pair
+                pair_id += 1
+                active_pair = None
+                active_type = None
+                entry_price = None
+                entry_time = None
 
         # ---------------- LAYOUT ---------------- #
         fig.update_layout(
