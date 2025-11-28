@@ -110,6 +110,7 @@ def run_plotting():
         ema200_line = go.Scatter(x=df[DATE_COL], y=df["EMA_200"], mode="lines", name="EMA 200", line=dict(width=1.5, color="lightgray"))
         vwap_line = go.Scatter(x=df[DATE_COL], y=df[VWAP_COL], mode="lines", name="VWAP", line=dict(width=1.5, color="orange"))
 
+        # ------------- BUY / SELL ARROWS (UPDATED) ---------------- #
         buy_trades = df[df[QUANTITY_TRADED_COL] > 0]
         sell_trades = df[df[QUANTITY_TRADED_COL] < 0]
 
@@ -117,21 +118,29 @@ def run_plotting():
             x=buy_trades[DATE_COL],
             y=buy_trades[CLOSE_COL],
             mode="markers",
-            marker=dict(size=11, color="white", symbol="triangle-up"),
+            marker=dict(size=16, color="lime", symbol="arrow-up"),
             name="BUY",
             hoverinfo="text",
-            hovertext=buy_trades.apply(lambda r: f"BUY @ {r[CLOSE_COL]:.2f}<br>Net Qty: {r['Net_Qty']:.0f}", axis=1),
+            hovertext=buy_trades.apply(
+                lambda r: f"BUY @ {r[CLOSE_COL]:.2f}<br>Net Qty: {r['Net_Qty']:.0f}",
+                axis=1,
+            ),
         )
+
         sell_marker = go.Scatter(
             x=sell_trades[DATE_COL],
             y=sell_trades[CLOSE_COL],
             mode="markers",
-            marker=dict(size=11, color="orange", symbol="triangle-down"),
+            marker=dict(size=16, color="red", symbol="arrow-down"),
             name="SELL",
             hoverinfo="text",
-            hovertext=sell_trades.apply(lambda r: f"SELL @ {r[CLOSE_COL]:.2f}<br>Net Qty: {r['Net_Qty']:.0f}", axis=1),
+            hovertext=sell_trades.apply(
+                lambda r: f"SELL @ {r[CLOSE_COL]:.2f}<br>Net Qty: {r['Net_Qty']:.0f}",
+                axis=1,
+            ),
         )
 
+        # ---------------- Longs / Shorts Panel ---------------- #
         longs_line = go.Scatter(x=df[DATE_COL], y=df[LONG_COL], mode="lines", name="Longs Till Now", line=dict(width=2, color="lime"))
         ema5_longs_line = go.Scatter(x=df[DATE_COL], y=df["EMA_5_Longs"], mode="lines", name="EMA 5 (Longs)", line=dict(width=1, color="green", dash="dot"))
         shorts_line = go.Scatter(x=df[DATE_COL], y=df[SHORT_COL], mode="lines", name="Shorts Till Now", line=dict(width=2, color="red"))
@@ -149,6 +158,7 @@ def run_plotting():
             ),
         )
 
+        # PRICE PANEL
         fig.add_trace(candlestick, row=1, col=1)
         fig.add_trace(ema9_line, row=1, col=1)
         fig.add_trace(ema21_line, row=1, col=1)
@@ -159,12 +169,13 @@ def run_plotting():
         fig.add_trace(buy_marker, row=1, col=1)
         fig.add_trace(sell_marker, row=1, col=1)
 
+        # OI PANEL
         fig.add_trace(longs_line, row=2, col=1)
         fig.add_trace(ema5_longs_line, row=2, col=1)
         fig.add_trace(shorts_line, row=2, col=1)
         fig.add_trace(ema5_shorts_line, row=2, col=1)
 
-        # ---------------- PAIR NUMBERING (C1 + P1 LOGIC) ---------------- #
+        # ---------------- PAIR NUMBERING + ARROW CONNECTOR ---------------- #
         df["Prev_Net_Qty"] = df["Net_Qty"].shift(1).fillna(0)
 
         pair_id = 1
@@ -182,67 +193,71 @@ def run_plotting():
                 continue
 
             price = row[CLOSE_COL]
+            time = row[DATE_COL]
 
-            is_buy = qty_traded > 0
-            is_sell = qty_traded < 0
-
-            # -------- ENTRY CONDITION: position moves away from zero -------- #
+            # -------- ENTRY -------- #
             if prev_qty == 0:
-
-                if is_buy:
-                    active_type = "LONG"
-                else:
-                    active_type = "SHORT"
-
+                active_type = "LONG" if qty_traded > 0 else "SHORT"
                 active_pair = pair_id
                 entry_price = price
-                entry_time = row[DATE_COL]
+                entry_time = time
 
-                # right-side label
                 fig.add_annotation(
                     x=1.0, y=price,
                     text=f"{active_type} ({active_pair})",
                     showarrow=False,
+                    font=dict(size=10, color="lime" if active_type=="LONG" else "red"),
                     xanchor="left",
                     yanchor="middle",
-                    font=dict(size=10, color="green" if active_type == "LONG" else "red"),
-                    xref="paper", yref="y1"
+                    xref="paper", yref="y1",
                 )
-
                 continue
 
-            # -------- EXIT CONDITION: position returns to zero -------- #
+            # -------- EXIT (PAIR CLOSE) -------- #
             if curr_qty == 0 and active_pair is not None:
-
                 cover_type = "LONG COVER" if active_type == "LONG" else "SHORT COVER"
 
-                # right-side label at exit
+                # Exit label
                 fig.add_annotation(
                     x=1.0, y=price,
                     text=f"{cover_type} ({active_pair})",
                     showarrow=False,
+                    font=dict(size=10, color="lime" if active_type=="LONG" else "red"),
                     xanchor="left",
                     yanchor="middle",
-                    font=dict(size=10, color="lime" if active_type == "LONG" else "darkred"),
-                    xref="paper", yref="y1"
+                    xref="paper", yref="y1",
                 )
 
-                # draw connecting line entry → exit
+                # -------- CONNECTING LINE WITH ARROW (L2) -------- #
                 fig.add_shape(
                     type="line",
-                    x0=entry_time,
-                    x1=row[DATE_COL],
-                    y0=entry_price,
-                    y1=price,
+                    x0=entry_time, y0=entry_price,
+                    x1=time, y1=price,
                     xref="x1", yref="y1",
                     line=dict(
-                        width=1.5,
+                        width=2,
                         dash="dot",
-                        color="green" if active_type == "LONG" else "red"
+                        color="lime" if active_type=="LONG" else "red",
                     )
                 )
 
-                # next pair
+                # Arrowhead (end of pair)
+                fig.add_annotation(
+                    x=time,
+                    y=price,
+                    ax=entry_time,
+                    ay=entry_price,
+                    xref="x1",
+                    yref="y1",
+                    axref="x1",
+                    ayref="y1",
+                    showarrow=True,
+                    arrowhead=3,
+                    arrowsize=2,
+                    arrowcolor="lime" if active_type=="LONG" else "red"
+                )
+
+                # Reset for next pair
                 pair_id += 1
                 active_pair = None
                 active_type = None
@@ -252,26 +267,21 @@ def run_plotting():
         # ---------------- LAYOUT ---------------- #
         fig.update_layout(
             template="plotly_dark",
-            height=950,
+            height=980,
             hovermode="x unified",
             dragmode="pan",
-            legend=dict(
-                orientation="h",
-                yanchor="bottom",
-                y=1.02,
-                xanchor="right",
-                x=1,
-            ),
         )
 
-        fig.update_yaxes(title="Price", showspikes=True, fixedrange=False, row=1, col=1)
-        fig.update_xaxes(rangeslider_visible=False, showspikes=True, row=1, col=1, visible=False)
+        fig.update_yaxes(title="Price", row=1, col=1)
+        fig.update_yaxes(title="Quantity", row=2, col=1)
 
-        fig.update_yaxes(title="Quantity", showspikes=True, fixedrange=False, row=2, col=1)
-        fig.update_xaxes(title="Date", showspikes=True, row=2, col=1)
+        fig.update_xaxes(title="Date", row=2, col=1)
+        fig.update_xaxes(rangeslider_visible=False, row=1, col=1)
 
+        # Hide candle in legend
         fig.update_traces(showlegend=False, selector=dict(type="candlestick"))
 
+        # Final PnL label
         final_pnl = df["Cumulative_PnL_calc"].iloc[-1]
         pnl_color = "lime" if final_pnl >= 0 else "red"
 
@@ -280,8 +290,6 @@ def run_plotting():
             text=f"Cumulative P&L: {final_pnl:,.2f}",
             showarrow=False,
             font=dict(size=18, color=pnl_color),
-            xanchor="left",
-            yanchor="bottom",
             xref="paper",
             yref="paper",
         )
