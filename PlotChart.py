@@ -147,7 +147,7 @@ def run_plotting():
 
         fig = make_subplots(
             rows=2, cols=1,
-            row_heights=[0.7, 0.3], 
+            row_heights=[0.8, 0.2], 
             shared_xaxes=True,
             vertical_spacing=0.02,
             subplot_titles=(f'Interactive Chart: {os.path.basename(INPUT_FILE)}', 'Open Interest Components')
