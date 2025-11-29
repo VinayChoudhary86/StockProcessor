@@ -136,6 +136,10 @@ def simulate_trades(df, investment_amount):
     last_buy_trigger_ltn = 0
     last_sell_trigger_stn = 0
 
+    # Track entry price and max favourable price for LONG positions
+    entry_price = None
+    max_price_since_entry = None
+
     for i in range(1, len(df)):
         current_price = df.loc[i, CLOSE_COL]
         previous_price = df.loc[i - 1, CLOSE_COL]
@@ -143,15 +147,49 @@ def simulate_trades(df, investment_amount):
         signal_prev = df.loc[i - 1, 'Signal']
         ltn_prev = df.loc[i - 1, LONG_TILL_NOW_COL]
         stn_prev = df.loc[i - 1, SHORT_TILL_NOW_COL]
-        
+
         # Position at the START of the current day (end of previous day)
-        position = df.loc[i - 1, 'Position'] 
+        position = df.loc[i - 1, 'Position']
+        prev_position = position
 
         # Calculate PnL based on the position held from the previous day
         df.loc[i, 'Daily_PnL'] = (current_price - previous_price) * position
 
         net_trade_qty = 0
-        calculated_trade_qty = math.floor(investment_amount / current_price) if current_price > 0 else 0
+
+        # ------------------------------------------------------------------
+        # RISK EXIT: Drawdown + Trend filter (for LONG positions)
+        # ------------------------------------------------------------------
+        if position > 0 and entry_price is not None:
+            ema20 = df.loc[i, 'EMA20'] if 'EMA20' in df.columns else None
+            ema50 = df.loc[i, 'EMA50'] if 'EMA50' in df.columns else None
+
+            hard_stop = current_price < entry_price * 0.90
+
+            trailing = False
+            if max_price_since_entry is not None and max_price_since_entry > 0:
+                dd_pct = (current_price - max_price_since_entry) / max_price_since_entry * 100.0
+                trailing = dd_pct <= -15.0
+
+            trend_break = False
+            if ema20 is not None and ema50 is not None:
+                trend_break = (
+                    (current_price < ema20 * 0.97) or
+                    (current_price < ema50 * 0.97) or
+                    (ema20 < ema50)
+                )
+
+            if hard_stop or trailing or trend_break:
+                # Force exit the LONG
+                net_trade_qty = -position
+                position = 0
+                last_buy_trigger_ltn = 0
+                entry_price = None
+                max_price_since_entry = None
+
+                df.loc[i, 'Quantity_Traded'] = net_trade_qty
+                df.loc[i, 'Position'] = position
+                continue
 
         # ------------------------------------------------------------------
         # VWAP FILTER
@@ -168,40 +206,56 @@ def simulate_trades(df, investment_amount):
         # ------------------------------------------------------------------
         # COMBINED EXIT/ENTRY LOGIC
         # ------------------------------------------------------------------
-        
+
         # --- 1. EXIT LOGIC (If a position is held and an opposite signal appears) ---
-        
+
         # Exit Short Position (position < 0) on a BUY signal
         if position < 0 and signal_prev == 'BUY' and allow_buy:
-            net_trade_qty = abs(position) # Buy to cover the short
-            position = 0                  # Position is now flat
-            last_sell_trigger_stn = 0     # Reset sell trigger
-            
+            net_trade_qty = abs(position)  # Buy to cover the short
+            position = 0                   # Position is now flat
+            last_sell_trigger_stn = 0      # Reset sell trigger
+
         # Exit Long Position (position > 0) on a SELL signal
         elif position > 0 and signal_prev == 'SELL' and allow_sell:
-            net_trade_qty = -position     # Sell to close the long
-            position = 0                  # Position is now flat
-            last_buy_trigger_ltn = 0      # Reset buy trigger
-        
+            net_trade_qty = -position      # Sell to close the long
+            position = 0                   # Position is now flat
+            last_buy_trigger_ltn = 0       # Reset buy trigger
+
         # --- 2. ENTRY LOGIC (Only if position is flat) ---
-        
+
         elif position == 0:
-            
+
             # BUY Entry
             if signal_prev == 'BUY' and allow_buy:
                 if ltn_prev > stn_prev and ltn_prev > last_buy_trigger_ltn:
-                    net_trade_qty = calculated_trade_qty
-                    position += calculated_trade_qty
+                    net_trade_qty = math.floor(investment_amount / current_price) if current_price > 0 else 0
+                    position += net_trade_qty
                     last_buy_trigger_ltn = ltn_prev
 
             # SELL Entry
             elif signal_prev == 'SELL' and allow_sell:
                 if stn_prev > ltn_prev and stn_prev > last_sell_trigger_stn:
-                    net_trade_qty = -calculated_trade_qty
-                    position -= calculated_trade_qty
+                    net_trade_qty = - (math.floor(investment_amount / current_price) if current_price > 0 else 0)
+                    position += net_trade_qty
                     last_sell_trigger_stn = stn_prev
 
         # ------------------------------------------------------------------
+        # Update tracking of entry/max price for LONG positions
+        # ------------------------------------------------------------------
+        if prev_position == 0 and position > 0:
+            # New long opened
+            entry_price = current_price
+            max_price_since_entry = current_price
+        elif position > 0 and entry_price is not None:
+            # Existing long, update max favourable price
+            if max_price_since_entry is None:
+                max_price_since_entry = current_price
+            else:
+                max_price_since_entry = max(max_price_since_entry, current_price)
+        elif position == 0:
+            # Flat, reset tracking
+            entry_price = None
+            max_price_since_entry = None
 
         # Update the DataFrame for the current row 'i'
         df.loc[i, 'Quantity_Traded'] = net_trade_qty
@@ -236,6 +290,10 @@ def run_pipeline():
         return
 
     df_signals = generate_signals(df_clean, DIFFERENCE_THRESHOLD_PCT, min_oi)
+    # Trend / regime filter moving averages
+    df_signals['EMA20'] = df_signals[CLOSE_COL].ewm(span=20, adjust=False).mean()
+    df_signals['EMA50'] = df_signals[CLOSE_COL].ewm(span=50, adjust=False).mean()
+
     df_trades = simulate_trades(df_signals, INVESTMENT_AMOUNT)
 
     output_cols = [
