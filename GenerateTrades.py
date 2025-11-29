@@ -161,26 +161,15 @@ def simulate_trades(df, investment_amount):
         # RISK EXIT: Drawdown + Trend filter (for LONG positions)
         # ------------------------------------------------------------------
         if position > 0 and entry_price is not None:
-            ema20 = df.loc[i, 'EMA20'] if 'EMA20' in df.columns else None
-            ema50 = df.loc[i, 'EMA50'] if 'EMA50' in df.columns else None
-
-            hard_stop = current_price < entry_price * 0.90
+                        
+            hard_stop = current_price < entry_price * 0.95
 
             trailing = False
             if max_price_since_entry is not None and max_price_since_entry > 0:
                 dd_pct = (current_price - max_price_since_entry) / max_price_since_entry * 100.0
                 trailing = dd_pct <= -15.0
 
-            trend_break = False
-            if ema20 is not None and ema50 is not None:
-                trend_break = (
-                    (current_price < ema20 * 0.97) or
-                    (current_price < ema50 * 0.97) or
-                    (ema20 < ema50)
-                )
-
-            if hard_stop or trailing or trend_break:
-                # Force exit the LONG
+            if hard_stop or trailing :              # Force exit the LONG
                 net_trade_qty = -position
                 position = 0
                 last_buy_trigger_ltn = 0
@@ -291,9 +280,8 @@ def run_pipeline():
 
     df_signals = generate_signals(df_clean, DIFFERENCE_THRESHOLD_PCT, min_oi)
     # Trend / regime filter moving averages
-    df_signals['EMA20'] = df_signals[CLOSE_COL].ewm(span=20, adjust=False).mean()
-    df_signals['EMA50'] = df_signals[CLOSE_COL].ewm(span=50, adjust=False).mean()
-
+    df_signals['SMA20'] = df_signals[CLOSE_COL].rolling(20).mean()
+    df_signals['SMA50'] = df_signals[CLOSE_COL].rolling(50).mean()
     df_trades = simulate_trades(df_signals, INVESTMENT_AMOUNT)
 
     output_cols = [
