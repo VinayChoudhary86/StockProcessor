@@ -71,16 +71,34 @@ def run_plotting():
         df["EMA_5_Longs"] = df[LONG_COL].ewm(span=5, adjust=False).mean()
         df["EMA_5_Shorts"] = df[SHORT_COL].ewm(span=5, adjust=False).mean()
 
+        # Build synthetic OHLC
         df["Open"] = df[CLOSE_COL].shift(1).fillna(df[CLOSE_COL].iloc[0])
         range_pct = 0.005
         df["High"] = df[[CLOSE_COL, "Open"]].max(axis=1) * (1 + range_pct)
         df["Low"] = df[[CLOSE_COL, "Open"]].min(axis=1) * (1 - range_pct)
+
+        # ---------------- VWAP vs CLOSE GAP % + COLOR ---------------- #
+        df["VWAP_Close_Gap_Pct"] = ((df[VWAP_COL] - df[CLOSE_COL]) * 100 / df[CLOSE_COL]).round(2)
+
+        def gap_color(gap):
+            if gap > 1:
+                return "red"          # VWAP > Price → Bearish pressure
+            elif gap < -1:
+                return "lime"         # VWAP < Price → Bullish pressure
+            else:
+                return "yellow"       # Neutral zone
+
+        df["Gap_Color"] = df["VWAP_Close_Gap_Pct"].apply(gap_color)
 
         # ---------------- HOVER TEXT ---------------- #
         hover_text = []
         for _, row in df.iterrows():
             cum_pnl_val = row["Cumulative_PnL_calc"]
             pnl_color = "lime" if cum_pnl_val >= 0 else "red"
+
+            gap_pct = row["VWAP_Close_Gap_Pct"]
+            gap_col = row["Gap_Color"]
+
             hover_text.append(
                 "Date: " + row[DATE_COL].strftime("%Y-%m-%d") + "<br>"
                 f"<span style='color:{pnl_color}'>Cumulative P&L: {cum_pnl_val:,.2f}</span><br>"
@@ -88,6 +106,8 @@ def run_plotting():
                 f"High: {row['High']:.2f}<br>"
                 f"Low: {row['Low']:.2f}<br>"
                 f"Close: {row[CLOSE_COL]:.2f}<br>"
+                f"VWAP: {row[VWAP_COL]:.2f}<br>"
+                f"<b>VWAP–Close Gap: <span style='color:{gap_col}'>{gap_pct:.2f}%</span></b><br>"
                 f"Net Qty: {row['Net_Qty']:.0f}<br>"
             )
 
@@ -110,7 +130,7 @@ def run_plotting():
         ema200_line = go.Scatter(x=df[DATE_COL], y=df["EMA_200"], mode="lines", name="EMA 200", line=dict(width=1.5, color="lightgray"))
         vwap_line = go.Scatter(x=df[DATE_COL], y=df[VWAP_COL], mode="lines", name="VWAP", line=dict(width=1.5, color="orange"))
 
-        # ------------- BUY / SELL ARROWS (UPDATED) ---------------- #
+        # ------------- BUY / SELL ARROWS ---------------- #
         buy_trades = df[df[QUANTITY_TRADED_COL] > 0]
         sell_trades = df[df[QUANTITY_TRADED_COL] < 0]
 
@@ -213,11 +233,10 @@ def run_plotting():
                 )
                 continue
 
-            # -------- EXIT (PAIR CLOSE) -------- #
+            # -------- EXIT -------- #
             if curr_qty == 0 and active_pair is not None:
                 cover_type = "LONG COVER" if active_type == "LONG" else "SHORT COVER"
 
-                # Exit label
                 fig.add_annotation(
                     x=1.0, y=price,
                     text=f"{cover_type} ({active_pair})",
@@ -228,7 +247,7 @@ def run_plotting():
                     xref="paper", yref="y1",
                 )
 
-                # -------- CONNECTING LINE WITH ARROW (L2) -------- #
+                # connector line
                 fig.add_shape(
                     type="line",
                     x0=entry_time, y0=entry_price,
@@ -241,7 +260,7 @@ def run_plotting():
                     )
                 )
 
-                # Arrowhead (end of pair)
+                # arrow
                 fig.add_annotation(
                     x=time,
                     y=price,
@@ -257,7 +276,6 @@ def run_plotting():
                     arrowcolor="lime" if active_type=="LONG" else "red"
                 )
 
-                # Reset for next pair
                 pair_id += 1
                 active_pair = None
                 active_type = None
@@ -278,10 +296,8 @@ def run_plotting():
         fig.update_xaxes(title="Date", row=2, col=1)
         fig.update_xaxes(rangeslider_visible=False, row=1, col=1)
 
-        # Hide candle in legend
         fig.update_traces(showlegend=False, selector=dict(type="candlestick"))
 
-        # Final PnL label
         final_pnl = df["Cumulative_PnL_calc"].iloc[-1]
         pnl_color = "lime" if final_pnl >= 0 else "red"
 

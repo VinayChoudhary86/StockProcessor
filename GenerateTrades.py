@@ -21,6 +21,10 @@ DIFFERENCE_THRESHOLD_PCT_INI = cfg["DIFFERENCE_THRESHOLD_PCT"]
 DIFFERENCE_THRESHOLD_PCT = DIFFERENCE_THRESHOLD_PCT_INI / 100.0
 SYMBOL = cfg["SYMBOL"]
 
+# NEW CONFIG FOR VWAP EXIT LOGIC
+VWAP_EXIT_LONG_PCT = cfg.get("VWAP_EXIT_LONG_PCT", 0.0) / 100.0
+VWAP_EXIT_SHORT_PCT = cfg.get("VWAP_EXIT_SHORT_PCT", 0.0) / 100.0
+
 ANALYSIS_FILE_NAME = f"{SYMBOL}_Analysis.csv"
 INPUT_FILE = os.path.join(TARGET_DIR, ANALYSIS_FILE_NAME)
 OUTPUT_FILE = os.path.join(TARGET_DIR, f"{SYMBOL}_Trades.csv")
@@ -36,24 +40,26 @@ OI_SUM_COL = 'Daily_Open_Interest_Sum'
 # CLEANING FUNCTION
 # ------------------------------------------------------------------------------------
 def clean_data(df):
-    """Clean and ensure necessary columns are numeric and filled."""
     required_cols = [LONG_TILL_NOW_COL, SHORT_TILL_NOW_COL, OI_SUM_COL, CLOSE_COL]
     optional_numeric_cols = ['vwap']
 
     df.columns = df.columns.str.strip()
 
-    # Clean required columns
     for col in required_cols:
         if col in df.columns:
-            # Use pd.to_numeric with coerce for robust cleaning
-            df[col] = pd.to_numeric(df[col].astype(str).str.replace(r'[^\d\.\-]', '', regex=True), errors='coerce').fillna(0)
+            df[col] = pd.to_numeric(
+                df[col].astype(str).str.replace(r'[^\d\.\-]', '', regex=True),
+                errors='coerce'
+            ).fillna(0)
         else:
             raise KeyError(f"Required column not found: '{col}'.")
 
-    # Clean optional numeric columns
     for col in optional_numeric_cols:
         if col in df.columns:
-            df[col] = pd.to_numeric(df[col].astype(str).str.replace(r'[^\d\.\-]', '', regex=True), errors='coerce').fillna(method='ffill')
+            df[col] = pd.to_numeric(
+                df[col].astype(str).str.replace(r'[^\d\.\-]', '', regex=True),
+                errors='coerce'
+            ).fillna(method='ffill')
 
     df.dropna(subset=[OI_SUM_COL, LONG_TILL_NOW_COL, SHORT_TILL_NOW_COL, CLOSE_COL], inplace=True)
     df.reset_index(drop=True, inplace=True)
@@ -125,7 +131,7 @@ def generate_signals(df, threshold_pct, min_oi_sum):
 
 
 # ------------------------------------------------------------------------------------
-# TRADE SIMULATION (VWAP FILTER + ONE-POSITION-ONLY RULE)
+# TRADE SIMULATION WITH CORRECT VWAP EXIT LOGIC
 # ------------------------------------------------------------------------------------
 def simulate_trades(df, investment_amount):
 
@@ -136,117 +142,178 @@ def simulate_trades(df, investment_amount):
     last_buy_trigger_ltn = 0
     last_sell_trigger_stn = 0
 
-    # Track entry price and max favourable price for LONG positions
     entry_price = None
     max_price_since_entry = None
+
+    # Correct VWAP exit sequence flags
+    vwap_long_armed = False
+    vwap_short_armed = False
 
     for i in range(1, len(df)):
         current_price = df.loc[i, CLOSE_COL]
         previous_price = df.loc[i - 1, CLOSE_COL]
+        vwap = df.loc[i, 'vwap'] if 'vwap' in df.columns else None
 
         signal_prev = df.loc[i - 1, 'Signal']
         ltn_prev = df.loc[i - 1, LONG_TILL_NOW_COL]
         stn_prev = df.loc[i - 1, SHORT_TILL_NOW_COL]
 
-        # Position at the START of the current day (end of previous day)
         position = df.loc[i - 1, 'Position']
         prev_position = position
 
-        # Calculate PnL based on the position held from the previous day
         df.loc[i, 'Daily_PnL'] = (current_price - previous_price) * position
 
         net_trade_qty = 0
 
         # ------------------------------------------------------------------
-        # RISK EXIT: Drawdown + Trend filter (for LONG positions)
+        # CORRECT VWAP EXIT STRATEGY (Your final rule)
+        # ------------------------------------------------------------------
+        if vwap and vwap > 0:
+
+            # ------------ LONG EXIT ------------
+            if position > 0:
+
+                # STEP 1 — Arm exit when close > vwap * (1 + %)
+                if not vwap_long_armed and VWAP_EXIT_LONG_PCT > 0:
+                    if current_price > vwap * (1 + VWAP_EXIT_LONG_PCT):
+                        vwap_long_armed = True
+
+                # STEP 2 — Exit when armed AND close < vwap
+                elif vwap_long_armed:
+                    if current_price < vwap:
+                        net_trade_qty = -position
+                        position = 0
+                        last_buy_trigger_ltn = 0
+
+                        # reset everything
+                        vwap_long_armed = False
+                        vwap_short_armed = False
+                        entry_price = None
+                        max_price_since_entry = None
+
+                        df.loc[i, 'Quantity_Traded'] = net_trade_qty
+                        df.loc[i, 'Position'] = position
+                        continue
+
+            # ------------ SHORT EXIT (vice versa) ------------
+            if position < 0:
+
+                # STEP 1 — Arm exit when close < vwap * (1 - %)
+                if not vwap_short_armed and VWAP_EXIT_SHORT_PCT > 0:
+                    if current_price < vwap * (1 - VWAP_EXIT_SHORT_PCT):
+                        vwap_short_armed = True
+
+                # STEP 2 — Exit when armed AND close > vwap
+                elif vwap_short_armed:
+                    if current_price > vwap:
+                        net_trade_qty = abs(position)
+                        position = 0
+                        last_sell_trigger_stn = 0
+
+                        # reset
+                        vwap_long_armed = False
+                        vwap_short_armed = False
+                        entry_price = None
+                        max_price_since_entry = None
+
+                        df.loc[i, 'Quantity_Traded'] = net_trade_qty
+                        df.loc[i, 'Position'] = position
+                        continue
+
+        # ------------------------------------------------------------------
+        # EXISTING RISK EXIT FOR LONGS
         # ------------------------------------------------------------------
         if position > 0 and entry_price is not None:
-                        
+
             hard_stop = current_price < entry_price * 0.95
 
             trailing = False
             if max_price_since_entry is not None and max_price_since_entry > 0:
-                dd_pct = (current_price - max_price_since_entry) / max_price_since_entry * 100.0
-                trailing = dd_pct <= -15.0
+                dd_pct = (current_price - max_price_since_entry) / max_price_since_entry * 100
+                trailing = dd_pct <= -15
 
-            if hard_stop or trailing :              # Force exit the LONG
+            if hard_stop or trailing:
                 net_trade_qty = -position
                 position = 0
                 last_buy_trigger_ltn = 0
+
                 entry_price = None
                 max_price_since_entry = None
+                vwap_long_armed = False
 
                 df.loc[i, 'Quantity_Traded'] = net_trade_qty
                 df.loc[i, 'Position'] = position
                 continue
 
         # ------------------------------------------------------------------
-        # VWAP FILTER
+        # VWAP ENTRY FILTER
         # ------------------------------------------------------------------
-        vwap = df.loc[i, 'vwap'] if 'vwap' in df.columns else None
         allow_buy = allow_sell = True
 
         if vwap and vwap > 0:
-            # Note: This is checking the current price vs current VWAP for a new trade/exit
             diff_pct = abs(current_price - vwap) / vwap * 100
             allow_buy = (diff_pct <= 0.5) or (current_price > vwap)
             allow_sell = (diff_pct <= 0.5) or (current_price < vwap)
 
         # ------------------------------------------------------------------
-        # COMBINED EXIT/ENTRY LOGIC
+        # EXIT ON OPPOSITE SIGNAL
         # ------------------------------------------------------------------
-
-        # --- 1. EXIT LOGIC (If a position is held and an opposite signal appears) ---
-
-        # Exit Short Position (position < 0) on a BUY signal
         if position < 0 and signal_prev == 'BUY' and allow_buy:
-            net_trade_qty = abs(position)  # Buy to cover the short
-            position = 0                   # Position is now flat
-            last_sell_trigger_stn = 0      # Reset sell trigger
+            net_trade_qty = abs(position)
+            position = 0
+            last_sell_trigger_stn = 0
+            vwap_short_armed = False
 
-        # Exit Long Position (position > 0) on a SELL signal
         elif position > 0 and signal_prev == 'SELL' and allow_sell:
-            net_trade_qty = -position      # Sell to close the long
-            position = 0                   # Position is now flat
-            last_buy_trigger_ltn = 0       # Reset buy trigger
+            net_trade_qty = -position
+            position = 0
+            last_buy_trigger_ltn = 0
+            vwap_long_armed = False
 
-        # --- 2. ENTRY LOGIC (Only if position is flat) ---
-
+        # ------------------------------------------------------------------
+        # ENTRY LOGIC
+        # ------------------------------------------------------------------
         elif position == 0:
 
-            # BUY Entry
+            # Long entry
             if signal_prev == 'BUY' and allow_buy:
                 if ltn_prev > stn_prev and ltn_prev > last_buy_trigger_ltn:
-                    net_trade_qty = math.floor(investment_amount / current_price) if current_price > 0 else 0
-                    position += net_trade_qty
+                    qty = math.floor(investment_amount / current_price) if current_price > 0 else 0
+                    net_trade_qty = qty
+                    position += qty
                     last_buy_trigger_ltn = ltn_prev
 
-            # SELL Entry
+                    vwap_long_armed = False
+                    vwap_short_armed = False
+
+            # Short entry
             elif signal_prev == 'SELL' and allow_sell:
                 if stn_prev > ltn_prev and stn_prev > last_sell_trigger_stn:
-                    net_trade_qty = - (math.floor(investment_amount / current_price) if current_price > 0 else 0)
-                    position += net_trade_qty
+                    qty = math.floor(investment_amount / current_price) if current_price > 0 else 0
+                    net_trade_qty = -qty
+                    position -= qty
                     last_sell_trigger_stn = stn_prev
 
+                    vwap_long_armed = False
+                    vwap_short_armed = False
+
         # ------------------------------------------------------------------
-        # Update tracking of entry/max price for LONG positions
+        # UPDATE ENTRY AND MAX PRICE
         # ------------------------------------------------------------------
         if prev_position == 0 and position > 0:
-            # New long opened
             entry_price = current_price
             max_price_since_entry = current_price
+            vwap_long_armed = False
+
         elif position > 0 and entry_price is not None:
-            # Existing long, update max favourable price
-            if max_price_since_entry is None:
-                max_price_since_entry = current_price
-            else:
-                max_price_since_entry = max(max_price_since_entry, current_price)
+            max_price_since_entry = max(max_price_since_entry, current_price)
+
         elif position == 0:
-            # Flat, reset tracking
             entry_price = None
             max_price_since_entry = None
+            vwap_long_armed = False
+            vwap_short_armed = False
 
-        # Update the DataFrame for the current row 'i'
         df.loc[i, 'Quantity_Traded'] = net_trade_qty
         df.loc[i, 'Position'] = position
 
@@ -267,8 +334,7 @@ def run_pipeline():
 
     df = pd.read_csv(INPUT_FILE, thousands=',')
 
-    # The clean_data function uses pd.to_numeric(errors='coerce') which is more robust
-    df_clean = clean_data(df.copy()) 
+    df_clean = clean_data(df.copy())
     if df_clean.empty:
         print("ERROR: Data empty after cleaning.")
         return
@@ -279,9 +345,10 @@ def run_pipeline():
         return
 
     df_signals = generate_signals(df_clean, DIFFERENCE_THRESHOLD_PCT, min_oi)
-    # Trend / regime filter moving averages
+
     df_signals['SMA20'] = df_signals[CLOSE_COL].rolling(20).mean()
     df_signals['SMA50'] = df_signals[CLOSE_COL].rolling(50).mean()
+
     df_trades = simulate_trades(df_signals, INVESTMENT_AMOUNT)
 
     output_cols = [

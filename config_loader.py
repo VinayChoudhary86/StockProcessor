@@ -31,7 +31,7 @@ def load_config():
         "SD_MULTIPLIER": float(section.get("SD_MULTIPLIER", "0.2")),
         "TRADING_QTY": int(section.get("TRADING_QTY", "1000")),
         "INVESTMENT_AMOUNT": int(section.get("INVESTMENT_AMOUNT", "100000")),
-        "DIFFERENCE_THRESHOLD_PCT": float(section.get("DIFFERENCE_THRESHOLD_PCT", "5.0")),
+        "DIFFERENCE_THRESHOLD_PCT": float(section.get("VWAP_EXPAND_PCT", "5.0")),
         "SYMBOL": section.get("SYMBOL", "STOCK")
     }
 
