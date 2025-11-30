@@ -19,7 +19,7 @@ DIFFERENCE_THRESHOLD_PCT_INI = cfg["DIFFERENCE_THRESHOLD_PCT"]
 DIFFERENCE_THRESHOLD_PCT = DIFFERENCE_THRESHOLD_PCT_INI / 100.0
 SYMBOL = cfg["SYMBOL"]
 
-# NEW CONFIG FOR EMA / VWAP EXIT LOGIC
+# NEW CONFIG FOR EMA EXIT LOGIC (LONG & SHORT)
 EMA_EXIT_LONG_PCT = cfg.get("EMA_EXIT_LONG_PCT", 10.0) / 100.0
 EMA_EXIT_SHORT_PCT = cfg.get("EMA_EXIT_SHORT_PCT", 10.0) / 100.0
 
@@ -129,7 +129,7 @@ def generate_signals(df, threshold_pct, min_oi_sum):
 
 
 # ------------------------------------------------------------------------------------
-# TRADE SIMULATION WITH EMA-ARMED VWAP EXIT LOGIC
+# TRADE SIMULATION WITH SYMMETRIC LONG & SHORT LOGIC
 # ------------------------------------------------------------------------------------
 def simulate_trades(df, investment_amount):
 
@@ -141,9 +141,9 @@ def simulate_trades(df, investment_amount):
     last_sell_trigger_stn = 0
 
     entry_price = None
-    max_price_since_entry = None
+    max_price_since_entry = None  # for long trailing
+    min_price_since_entry = None  # for short trailing
 
-    # Exit sequence flags
     ema_long_armed = False
     ema_short_armed = False
 
@@ -160,97 +160,128 @@ def simulate_trades(df, investment_amount):
         position = df.loc[i - 1, 'Position']
         prev_position = position
 
+        # mark-to-market PnL on existing position
         df.loc[i, 'Daily_PnL'] = (current_price - previous_price) * position
 
         net_trade_qty = 0
 
         # ------------------------------------------------------------------
-        # EMA-ARMED VWAP EXIT STRATEGY
+        # EMA-ARMED EXIT STRATEGY (SYMMETRIC, USING EMA50 FOR BOTH SIDES)
         # ------------------------------------------------------------------
-        if vwap and vwap > 0:
+        if ema50 and ema50 > 0:
 
-            # ------------ LONG EXIT ------------
+            # ------------ LONG EXIT (EMA-ARMED) ------------
             if position > 0:
-
-                # STEP 1 — Arm exit when close > EMA50 * (1 + %)
-                if (not ema_long_armed) and EMA_EXIT_LONG_PCT > 0 and ema50 and ema50 > 0:
-                    if current_price > ema50 * (1 + EMA_EXIT_LONG_PCT):
+                # Step 1: arm when close > EMA50 * (1 + EMA_EXIT_LONG_PCT)
+                if (not ema_long_armed) and EMA_EXIT_LONG_PCT > 0:
+                    if current_price > ema50 * (1.0 + EMA_EXIT_LONG_PCT):
                         ema_long_armed = True
 
-                # STEP 2 — Exit when armed AND close < vwap
+                # Step 2: exit when armed and close < EMA50
                 elif ema_long_armed:
                     if current_price < ema50:
                         net_trade_qty = -position
                         position = 0
                         last_buy_trigger_ltn = 0
 
-                        # reset everything
+                        # reset exit state
                         ema_long_armed = False
                         ema_short_armed = False
                         entry_price = None
                         max_price_since_entry = None
+                        min_price_since_entry = None
 
                         df.loc[i, 'Quantity_Traded'] = net_trade_qty
                         df.loc[i, 'Position'] = position
                         continue
 
-            # ------------ SHORT EXIT (vice versa) ------------
+            # ------------ SHORT EXIT (EMA-ARMED) ------------
             if position < 0:
-
-                # STEP 1 — Arm exit when close < vwap * (1 - %)
-                if not ema_short_armed and EMA_EXIT_SHORT_PCT > 0:
-                    if current_price < vwap * (1 - EMA_EXIT_SHORT_PCT):
+                # Step 1: arm when close < EMA50 * (1 - EMA_EXIT_SHORT_PCT)
+                if (not ema_short_armed) and EMA_EXIT_SHORT_PCT > 0:
+                    if current_price < ema50 * (1.0 - EMA_EXIT_SHORT_PCT):
                         ema_short_armed = True
 
-                # STEP 2 — Exit when armed AND close > vwap
+                # Step 2: exit when armed and close > EMA50
                 elif ema_short_armed:
-                    if current_price > vwap:
+                    if current_price > ema50:
                         net_trade_qty = abs(position)
                         position = 0
                         last_sell_trigger_stn = 0
 
-                        # reset
+                        # reset exit state
                         ema_long_armed = False
                         ema_short_armed = False
                         entry_price = None
                         max_price_since_entry = None
+                        min_price_since_entry = None
 
                         df.loc[i, 'Quantity_Traded'] = net_trade_qty
                         df.loc[i, 'Position'] = position
                         continue
 
         # ------------------------------------------------------------------
-        # EXISTING RISK EXIT FOR LONGS
+        # RISK EXITS (SYMMETRIC HARD STOP + TRAILING)
         # ------------------------------------------------------------------
+
+        # LONG side risk exits
         if position > 0 and entry_price is not None:
 
-            hard_stop = current_price < entry_price * 0.95
+            # Hard stop: -5% from entry
+            hard_stop_long = current_price < entry_price * 0.95
 
-            trailing = False
+            trailing_long = False
             if max_price_since_entry is not None and max_price_since_entry > 0:
-                dd_pct = (current_price - max_price_since_entry) / max_price_since_entry * 100
-                trailing = dd_pct <= -15
+                dd_pct = (current_price - max_price_since_entry) / max_price_since_entry * 100.0
+                trailing_long = dd_pct <= -15.0
 
-            if hard_stop or trailing:
+            if hard_stop_long or trailing_long:
                 net_trade_qty = -position
                 position = 0
                 last_buy_trigger_ltn = 0
 
                 entry_price = None
                 max_price_since_entry = None
+                min_price_since_entry = None
                 ema_long_armed = False
 
                 df.loc[i, 'Quantity_Traded'] = net_trade_qty
                 df.loc[i, 'Position'] = position
                 continue
 
+        # SHORT side risk exits (mirror of long)
+        if position < 0 and entry_price is not None:
+
+            # Hard stop: +5% against entry for shorts
+            hard_stop_short = current_price > entry_price * 1.05
+
+            trailing_short = False
+            if min_price_since_entry is not None and min_price_since_entry > 0:
+                # For shorts, we benefited as price went down; exit if price bounces from low by 15% or more
+                bounce_pct = (current_price - min_price_since_entry) / min_price_since_entry * 100.0
+                trailing_short = bounce_pct >= 15.0
+
+            if hard_stop_short or trailing_short:
+                net_trade_qty = abs(position)
+                position = 0
+                last_sell_trigger_stn = 0
+
+                entry_price = None
+                max_price_since_entry = None
+                min_price_since_entry = None
+                ema_short_armed = False
+
+                df.loc[i, 'Quantity_Traded'] = net_trade_qty
+                df.loc[i, 'Position'] = position
+                continue
+
         # ------------------------------------------------------------------
-        # VWAP ENTRY FILTER
+        # VWAP ENTRY FILTER (UNCHANGED)
         # ------------------------------------------------------------------
         allow_buy = allow_sell = True
 
         if vwap and vwap > 0:
-            diff_pct = abs(current_price - vwap) / vwap * 100
+            diff_pct = abs(current_price - vwap) / vwap * 100.0
             allow_buy = (diff_pct <= 0.5) or (current_price > vwap)
             allow_sell = (diff_pct <= 0.5) or (current_price < vwap)
 
@@ -270,7 +301,7 @@ def simulate_trades(df, investment_amount):
             ema_long_armed = False
 
         # ------------------------------------------------------------------
-        # ENTRY LOGIC
+        # ENTRY LOGIC (UNCHANGED, SYMMETRIC SIGNAL RULES)
         # ------------------------------------------------------------------
         elif position == 0:
 
@@ -297,19 +328,34 @@ def simulate_trades(df, investment_amount):
                     ema_short_armed = False
 
         # ------------------------------------------------------------------
-        # UPDATE ENTRY AND MAX PRICE
+        # UPDATE ENTRY, MAX/MIN PRICE FOR TRAILING
         # ------------------------------------------------------------------
         if prev_position == 0 and position > 0:
+            # New long
             entry_price = current_price
             max_price_since_entry = current_price
+            min_price_since_entry = None
             ema_long_armed = False
 
+        elif prev_position == 0 and position < 0:
+            # New short
+            entry_price = current_price
+            min_price_since_entry = current_price
+            max_price_since_entry = None
+            ema_short_armed = False
+
         elif position > 0 and entry_price is not None:
-            max_price_since_entry = max(max_price_since_entry, current_price)
+            # Update max for long trailing
+            max_price_since_entry = max(max_price_since_entry, current_price) if max_price_since_entry is not None else current_price
+
+        elif position < 0 and entry_price is not None:
+            # Update min for short trailing
+            min_price_since_entry = min(min_price_since_entry, current_price) if min_price_since_entry is not None else current_price
 
         elif position == 0:
             entry_price = None
             max_price_since_entry = None
+            min_price_since_entry = None
             ema_long_armed = False
             ema_short_armed = False
 
@@ -349,7 +395,7 @@ def run_pipeline():
     df_signals['SMA20'] = df_signals[CLOSE_COL].rolling(20).mean()
     df_signals['SMA50'] = df_signals[CLOSE_COL].rolling(50).mean()
 
-    # NEW: EMA50 for arming condition
+    # EMA50 for arming condition
     df_signals['EMA50'] = df_signals[CLOSE_COL].ewm(span=50, adjust=False).mean()
 
     df_trades = simulate_trades(df_signals, INVESTMENT_AMOUNT)
