@@ -100,14 +100,13 @@ def run_plotting():
             gap_col = row["Gap_Color"]
 
             hover_text.append(
-                "Date: " + row[DATE_COL].strftime("%Y-%m-%d") + "<br>"
                 f"<span style='color:{pnl_color}'>Cumulative P&L: {cum_pnl_val:,.2f}</span><br>"
+                f"<b>VWAP–Close Gap: <span style='color:{gap_col}'>{gap_pct:.2f}%</span></b><br>"
                 f"Open: {row['Open']:.2f}<br>"
                 f"High: {row['High']:.2f}<br>"
                 f"Low: {row['Low']:.2f}<br>"
                 f"Close: {row[CLOSE_COL]:.2f}<br>"
                 f"VWAP: {row[VWAP_COL]:.2f}<br>"
-                f"<b>VWAP–Close Gap: <span style='color:{gap_col}'>{gap_pct:.2f}%</span></b><br>"
                 f"Net Qty: {row['Net_Qty']:.0f}<br>"
             )
 
