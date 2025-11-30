@@ -22,8 +22,8 @@ DIFFERENCE_THRESHOLD_PCT = DIFFERENCE_THRESHOLD_PCT_INI / 100.0
 SYMBOL = cfg["SYMBOL"]
 
 # NEW CONFIG FOR VWAP EXIT LOGIC
-VWAP_EXIT_LONG_PCT = cfg.get("VWAP_EXIT_LONG_PCT", 0.0) / 100.0
-VWAP_EXIT_SHORT_PCT = cfg.get("VWAP_EXIT_SHORT_PCT", 0.0) / 100.0
+VWAP_EXIT_LONG_PCT = cfg.get("VWAP_EXIT_LONG_PCT", 1) / 100.0
+VWAP_EXIT_SHORT_PCT = cfg.get("VWAP_EXIT_SHORT_PCT", 1) / 100.0
 
 ANALYSIS_FILE_NAME = f"{SYMBOL}_Analysis.csv"
 INPUT_FILE = os.path.join(TARGET_DIR, ANALYSIS_FILE_NAME)
@@ -176,14 +176,16 @@ def simulate_trades(df, investment_amount):
                 # STEP 1 — Arm exit when close > vwap * (1 + %)
                 if not vwap_long_armed and VWAP_EXIT_LONG_PCT > 0:
                     if current_price > vwap * (1 + VWAP_EXIT_LONG_PCT):
+                        dt1 = df.loc[i, 'DATE']
                         vwap_long_armed = True
 
                 # STEP 2 — Exit when armed AND close < vwap
-                elif vwap_long_armed:
+                if vwap_long_armed:
                     if current_price < vwap:
                         net_trade_qty = -position
                         position = 0
                         last_buy_trigger_ltn = 0
+                        dt2 = df.loc[i, 'DATE']
 
                         # reset everything
                         vwap_long_armed = False
@@ -204,7 +206,7 @@ def simulate_trades(df, investment_amount):
                         vwap_short_armed = True
 
                 # STEP 2 — Exit when armed AND close > vwap
-                elif vwap_short_armed:
+                if vwap_short_armed:
                     if current_price > vwap:
                         net_trade_qty = abs(position)
                         position = 0
