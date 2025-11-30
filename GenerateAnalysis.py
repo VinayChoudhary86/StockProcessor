@@ -397,7 +397,7 @@ def build_base_dataframe(target_directory, sd_multiplier=SD_MULTIPLIER):
 
     mapped = final_df["Scenario_Tuple"].apply(map_scenario_tuple)
     final_df["F&O_Conclusion"] = mapped.apply(lambda t: t[0])
-    final_df["Trade_Signal"] = mapped.apply(lambda t: t[1])
+    # final_df["Trade_Signal"] = mapped.apply(lambda t: t[1])
 
     return final_df.reset_index(drop=True)
 
@@ -510,7 +510,7 @@ def apply_thresholds_and_generate_files(target_directory, sd_multiplier=SD_MULTI
         "OI_Dir",
         "Scenario_Tuple",
         "F&O_Conclusion",
-        "Trade_Signal",
+        # "Trade_Signal",
         "Above_Price_Thr",
         "Above_Del_Thr",
         "Above_OI_Thr",
