@@ -77,18 +77,20 @@ def run_plotting():
         df["High"] = df[[CLOSE_COL, "Open"]].max(axis=1) * (1 + range_pct)
         df["Low"] = df[[CLOSE_COL, "Open"]].min(axis=1) * (1 - range_pct)
 
-        # ---------------- VWAP vs CLOSE GAP % + COLOR ---------------- #
-        df["VWAP_Close_Gap_Pct"] = ((df[VWAP_COL] - df[CLOSE_COL]) * 100 / df[CLOSE_COL]).round(2)
+        # ---------------- CLOSE vs EMA50 GAP % + COLOR ---------------- #
+        # Gap = how far CLOSE is from its 50-EMA, in %
+        # (Close - EMA50) / EMA50 * 100
+        df["EMA50_Close_Gap_Pct"] = ((df[CLOSE_COL] - df["EMA_50"]) * 100 / df["EMA_50"]).round(2)
 
         def gap_color(gap):
             if gap > 1:
-                return "red"          # VWAP > Price → Bearish pressure
+                return "lime"          # Close > EMA50 by >1% → bullish
             elif gap < -1:
-                return "lime"         # VWAP < Price → Bullish pressure
+                return "red"           # Close < EMA50 by >1% → bearish
             else:
-                return "yellow"       # Neutral zone
+                return "yellow"        # Neutral zone
 
-        df["Gap_Color"] = df["VWAP_Close_Gap_Pct"].apply(gap_color)
+        df["Gap_Color"] = df["EMA50_Close_Gap_Pct"].apply(gap_color)
 
         # ---------------- HOVER TEXT ---------------- #
         hover_text = []
@@ -96,16 +98,17 @@ def run_plotting():
             cum_pnl_val = row["Cumulative_PnL_calc"]
             pnl_color = "lime" if cum_pnl_val >= 0 else "red"
 
-            gap_pct = row["VWAP_Close_Gap_Pct"]
+            gap_pct = row["EMA50_Close_Gap_Pct"]
             gap_col = row["Gap_Color"]
 
             hover_text.append(
                 f"<span style='color:{pnl_color}'>Cumulative P&L: {cum_pnl_val:,.2f}</span><br>"
-                f"<b>VWAP–Close Gap: <span style='color:{gap_col}'>{gap_pct:.2f}%</span></b><br>"
+                f"<b>Close–EMA50 Gap: <span style='color:{gap_col}'>{gap_pct:.2f}%</span></b><br>"
                 f"Open: {row['Open']:.2f}<br>"
                 f"High: {row['High']:.2f}<br>"
                 f"Low: {row['Low']:.2f}<br>"
                 f"Close: {row[CLOSE_COL]:.2f}<br>"
+                f"EMA50: {row['EMA_50']:.2f}<br>"
                 f"VWAP: {row[VWAP_COL]:.2f}<br>"
                 f"Net Qty: {row['Net_Qty']:.0f}<br>"
             )
@@ -225,7 +228,7 @@ def run_plotting():
                     x=1.0, y=price,
                     text=f"{active_type} ({active_pair})",
                     showarrow=False,
-                    font=dict(size=10, color="lime" if active_type=="LONG" else "red"),
+                    font=dict(size=10, color="lime" if active_type == "LONG" else "red"),
                     xanchor="left",
                     yanchor="middle",
                     xref="paper", yref="y1",
@@ -240,7 +243,7 @@ def run_plotting():
                     x=1.0, y=price,
                     text=f"{cover_type} ({active_pair})",
                     showarrow=False,
-                    font=dict(size=10, color="lime" if active_type=="LONG" else "red"),
+                    font=dict(size=10, color="lime" if active_type == "LONG" else "red"),
                     xanchor="left",
                     yanchor="middle",
                     xref="paper", yref="y1",
@@ -255,7 +258,7 @@ def run_plotting():
                     line=dict(
                         width=2,
                         dash="dot",
-                        color="lime" if active_type=="LONG" else "red",
+                        color="lime" if active_type == "LONG" else "red",
                     )
                 )
 
@@ -272,7 +275,7 @@ def run_plotting():
                     showarrow=True,
                     arrowhead=3,
                     arrowsize=2,
-                    arrowcolor="lime" if active_type=="LONG" else "red"
+                    arrowcolor="lime" if active_type == "LONG" else "red"
                 )
 
                 pair_id += 1

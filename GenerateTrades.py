@@ -1,5 +1,3 @@
-# Trader_11.py
-
 import os
 import math
 import warnings
@@ -21,9 +19,9 @@ DIFFERENCE_THRESHOLD_PCT_INI = cfg["DIFFERENCE_THRESHOLD_PCT"]
 DIFFERENCE_THRESHOLD_PCT = DIFFERENCE_THRESHOLD_PCT_INI / 100.0
 SYMBOL = cfg["SYMBOL"]
 
-# NEW CONFIG FOR VWAP EXIT LOGIC
-VWAP_EXIT_LONG_PCT = cfg.get("VWAP_EXIT_LONG_PCT", 1) / 100.0
-VWAP_EXIT_SHORT_PCT = cfg.get("VWAP_EXIT_SHORT_PCT", 1) / 100.0
+# NEW CONFIG FOR EMA / VWAP EXIT LOGIC
+EMA_EXIT_LONG_PCT = cfg.get("EMA_EXIT_LONG_PCT", 10.0) / 100.0
+EMA_EXIT_SHORT_PCT = cfg.get("EMA_EXIT_SHORT_PCT", 10.0) / 100.0
 
 ANALYSIS_FILE_NAME = f"{SYMBOL}_Analysis.csv"
 INPUT_FILE = os.path.join(TARGET_DIR, ANALYSIS_FILE_NAME)
@@ -131,7 +129,7 @@ def generate_signals(df, threshold_pct, min_oi_sum):
 
 
 # ------------------------------------------------------------------------------------
-# TRADE SIMULATION WITH CORRECT VWAP EXIT LOGIC
+# TRADE SIMULATION WITH EMA-ARMED VWAP EXIT LOGIC
 # ------------------------------------------------------------------------------------
 def simulate_trades(df, investment_amount):
 
@@ -145,14 +143,15 @@ def simulate_trades(df, investment_amount):
     entry_price = None
     max_price_since_entry = None
 
-    # Correct VWAP exit sequence flags
-    vwap_long_armed = False
-    vwap_short_armed = False
+    # Exit sequence flags
+    ema_long_armed = False
+    ema_short_armed = False
 
     for i in range(1, len(df)):
         current_price = df.loc[i, CLOSE_COL]
         previous_price = df.loc[i - 1, CLOSE_COL]
         vwap = df.loc[i, 'vwap'] if 'vwap' in df.columns else None
+        ema50 = df.loc[i, 'EMA50'] if 'EMA50' in df.columns else None
 
         signal_prev = df.loc[i - 1, 'Signal']
         ltn_prev = df.loc[i - 1, LONG_TILL_NOW_COL]
@@ -166,30 +165,28 @@ def simulate_trades(df, investment_amount):
         net_trade_qty = 0
 
         # ------------------------------------------------------------------
-        # CORRECT VWAP EXIT STRATEGY (Your final rule)
+        # EMA-ARMED VWAP EXIT STRATEGY
         # ------------------------------------------------------------------
         if vwap and vwap > 0:
 
             # ------------ LONG EXIT ------------
             if position > 0:
 
-                # STEP 1 — Arm exit when close > vwap * (1 + %)
-                if not vwap_long_armed and VWAP_EXIT_LONG_PCT > 0:
-                    if current_price > vwap * (1 + VWAP_EXIT_LONG_PCT):
-                        dt1 = df.loc[i, 'DATE']
-                        vwap_long_armed = True
+                # STEP 1 — Arm exit when close > EMA50 * (1 + %)
+                if (not ema_long_armed) and EMA_EXIT_LONG_PCT > 0 and ema50 and ema50 > 0:
+                    if current_price > ema50 * (1 + EMA_EXIT_LONG_PCT):
+                        ema_long_armed = True
 
                 # STEP 2 — Exit when armed AND close < vwap
-                if vwap_long_armed:
-                    if current_price < vwap:
+                elif ema_long_armed:
+                    if current_price < ema50:
                         net_trade_qty = -position
                         position = 0
                         last_buy_trigger_ltn = 0
-                        dt2 = df.loc[i, 'DATE']
 
                         # reset everything
-                        vwap_long_armed = False
-                        vwap_short_armed = False
+                        ema_long_armed = False
+                        ema_short_armed = False
                         entry_price = None
                         max_price_since_entry = None
 
@@ -201,20 +198,20 @@ def simulate_trades(df, investment_amount):
             if position < 0:
 
                 # STEP 1 — Arm exit when close < vwap * (1 - %)
-                if not vwap_short_armed and VWAP_EXIT_SHORT_PCT > 0:
-                    if current_price < vwap * (1 - VWAP_EXIT_SHORT_PCT):
-                        vwap_short_armed = True
+                if not ema_short_armed and EMA_EXIT_SHORT_PCT > 0:
+                    if current_price < vwap * (1 - EMA_EXIT_SHORT_PCT):
+                        ema_short_armed = True
 
                 # STEP 2 — Exit when armed AND close > vwap
-                if vwap_short_armed:
+                elif ema_short_armed:
                     if current_price > vwap:
                         net_trade_qty = abs(position)
                         position = 0
                         last_sell_trigger_stn = 0
 
                         # reset
-                        vwap_long_armed = False
-                        vwap_short_armed = False
+                        ema_long_armed = False
+                        ema_short_armed = False
                         entry_price = None
                         max_price_since_entry = None
 
@@ -241,7 +238,7 @@ def simulate_trades(df, investment_amount):
 
                 entry_price = None
                 max_price_since_entry = None
-                vwap_long_armed = False
+                ema_long_armed = False
 
                 df.loc[i, 'Quantity_Traded'] = net_trade_qty
                 df.loc[i, 'Position'] = position
@@ -264,13 +261,13 @@ def simulate_trades(df, investment_amount):
             net_trade_qty = abs(position)
             position = 0
             last_sell_trigger_stn = 0
-            vwap_short_armed = False
+            ema_short_armed = False
 
         elif position > 0 and signal_prev == 'SELL' and allow_sell:
             net_trade_qty = -position
             position = 0
             last_buy_trigger_ltn = 0
-            vwap_long_armed = False
+            ema_long_armed = False
 
         # ------------------------------------------------------------------
         # ENTRY LOGIC
@@ -285,8 +282,8 @@ def simulate_trades(df, investment_amount):
                     position += qty
                     last_buy_trigger_ltn = ltn_prev
 
-                    vwap_long_armed = False
-                    vwap_short_armed = False
+                    ema_long_armed = False
+                    ema_short_armed = False
 
             # Short entry
             elif signal_prev == 'SELL' and allow_sell:
@@ -296,8 +293,8 @@ def simulate_trades(df, investment_amount):
                     position -= qty
                     last_sell_trigger_stn = stn_prev
 
-                    vwap_long_armed = False
-                    vwap_short_armed = False
+                    ema_long_armed = False
+                    ema_short_armed = False
 
         # ------------------------------------------------------------------
         # UPDATE ENTRY AND MAX PRICE
@@ -305,7 +302,7 @@ def simulate_trades(df, investment_amount):
         if prev_position == 0 and position > 0:
             entry_price = current_price
             max_price_since_entry = current_price
-            vwap_long_armed = False
+            ema_long_armed = False
 
         elif position > 0 and entry_price is not None:
             max_price_since_entry = max(max_price_since_entry, current_price)
@@ -313,8 +310,8 @@ def simulate_trades(df, investment_amount):
         elif position == 0:
             entry_price = None
             max_price_since_entry = None
-            vwap_long_armed = False
-            vwap_short_armed = False
+            ema_long_armed = False
+            ema_short_armed = False
 
         df.loc[i, 'Quantity_Traded'] = net_trade_qty
         df.loc[i, 'Position'] = position
@@ -348,8 +345,12 @@ def run_pipeline():
 
     df_signals = generate_signals(df_clean, DIFFERENCE_THRESHOLD_PCT, min_oi)
 
+    # Moving averages
     df_signals['SMA20'] = df_signals[CLOSE_COL].rolling(20).mean()
     df_signals['SMA50'] = df_signals[CLOSE_COL].rolling(50).mean()
+
+    # NEW: EMA50 for arming condition
+    df_signals['EMA50'] = df_signals[CLOSE_COL].ewm(span=50, adjust=False).mean()
 
     df_trades = simulate_trades(df_signals, INVESTMENT_AMOUNT)
 
@@ -357,7 +358,8 @@ def run_pipeline():
         DATE_COL, CLOSE_COL, 'vwap',
         LONG_TILL_NOW_COL, SHORT_TILL_NOW_COL,
         OI_SUM_COL, 'Net_Position_Change', 'Signal_Threshold_Value',
-        'Signal', 'Quantity_Traded', 'Position', 'Daily_PnL', 'Cumulative_PnL'
+        'Signal', 'Quantity_Traded', 'Position', 'Daily_PnL', 'Cumulative_PnL',
+        'EMA50'
     ]
 
     df_trades[[c for c in output_cols if c in df_trades.columns]].to_csv(OUTPUT_FILE, index=False)
