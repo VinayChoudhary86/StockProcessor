@@ -11,7 +11,7 @@ namespace ShareUpdates
     public partial class NSEData : Form
     {
         string[] indexNames = { "NIFTY", "BANKNIFTY" };
-        string[] shares = { "DIXON", "TATAMOTORS", "TCS", "INFY", "RELIANCE", "INDUSINDBK", "RVNL" };
+        string[] shares = { "DIXON", "TATAMOTORS", "TCS", "INFY", "RELIANCE", "INDUSINDBK", "RVNL", "DABUR", "TATASTEEL" };
         Dictionary<int, string[]> expiryDates = new Dictionary<int, string[]>();
         string[] filesDownloaded = { };
         public NSEData()
