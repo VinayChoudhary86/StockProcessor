@@ -3,6 +3,7 @@ import pandas as pd
 import plotly.graph_objects as go
 from plotly.offline import plot
 from plotly.subplots import make_subplots
+from openpyxl import load_workbook
 from config_loader import load_config  # type: ignore
 
 # ---------------- CONFIG / CONSTANTS ---------------- #
@@ -11,7 +12,6 @@ cfg = load_config()
 TARGET_DIR = cfg["TARGET_DIRECTORY"]
 SYMBOL = cfg["SYMBOL"]
 
-# NOTE: now reading ML trades file
 TRADES_INPUT_FILE_NAME = f"{SYMBOL}_Trades_ML.csv"
 CHART_OUTPUT_FILE_NAME = f"{SYMBOL}_Chart.html"
 
@@ -27,6 +27,15 @@ LONG_COL = "Longs Till Now"
 SHORT_COL = "Shorts Till Now"
 
 
+def sign(q: float) -> int:
+    """Return sign of quantity: +1, -1, or 0."""
+    if q > 0:
+        return 1
+    elif q < 0:
+        return -1
+    return 0
+
+
 def run_plotting():
     print("\n--- Plotly Interactive Chart Generator (ML Trades) ---\n")
     print("Reading trades from:", INPUT_FILE)
@@ -39,6 +48,8 @@ def run_plotting():
         # ---------------- LOAD & CLEAN DATA ---------------- #
         df = pd.read_csv(INPUT_FILE, parse_dates=[DATE_COL])
 
+        print("Read file successfully.")
+        print("Cleaning Data.")
         df.sort_values(DATE_COL, inplace=True)
         df.reset_index(drop=True, inplace=True)
 
@@ -75,10 +86,9 @@ def run_plotting():
         df["Cumulative_PnL"] = df["Cumulative_PnL"].fillna(0)
 
         # ---------------- POSITION & PNL LOGIC ---------------- #
-        # Net_Qty = ML Position (already cumulative)
         df["Net_Qty"] = df["Position"]
+        df["Prev_Net_Qty"] = df["Net_Qty"].shift(1).fillna(0)
 
-        # Use ML PnL directly
         df["Daily_PnL_calc"] = df["Daily_PnL"]
         df["Cumulative_PnL_calc"] = df["Cumulative_PnL"]
 
@@ -91,9 +101,8 @@ def run_plotting():
         df["EMA_5_Longs"] = df[LONG_COL].ewm(span=5, adjust=False).mean()
         df["EMA_5_Shorts"] = df[SHORT_COL].ewm(span=5, adjust=False).mean()
 
-        # ---------------- OHLC FOR CANDLE ---------------- #
-        # Use real OPEN from ML file, synthesize HIGH/LOW around open/close
-        df["Open"] = df[OPEN_COL]  # alias for plotting
+        # ---------------- OHLC FOR CANDLE (synthetic high/low) ---------------- #
+        df["Open"] = df[OPEN_COL]
         range_pct = 0.005
         df["High"] = df[[CLOSE_COL, "Open"]].max(axis=1) * (1 + range_pct)
         df["Low"] = df[[CLOSE_COL, "Open"]].min(axis=1) * (1 - range_pct)
@@ -103,14 +112,15 @@ def run_plotting():
 
         def gap_color(gap):
             if gap > 1:
-                return "lime"          # Close > EMA50 by >1% → bullish
+                return "lime"
             elif gap < -1:
-                return "red"           # Close < EMA50 by >1% → bearish
+                return "red"
             else:
-                return "yellow"        # Neutral zone
+                return "yellow"
 
         df["Gap_Color"] = df["EMA50_Close_Gap_Pct"].apply(gap_color)
 
+        print("1.")
         # ---------------- HOVER TEXT ---------------- #
         hover_text = []
         for _, row in df.iterrows():
@@ -175,44 +185,6 @@ def run_plotting():
             line=dict(width=1.5, color="orange")
         )
 
-        # ------------- BUY / SELL ARROWS (Option B: based only on Quantity_Traded sign) ---------------- #
-        buy_trades = df[df[QUANTITY_TRADED_COL] > 0]
-        sell_trades = df[df[QUANTITY_TRADED_COL] < 0]
-
-        buy_marker = go.Scatter(
-            x=buy_trades[DATE_COL],
-            y=buy_trades["Open"],  # trade executed at open of the day
-            mode="markers",
-            marker=dict(size=16, color="lime", symbol="arrow-up"),
-            name="BUY",
-            hoverinfo="text",
-            hovertext=buy_trades.apply(
-                lambda r: (
-                    f"BUY @ {r['Open']:.2f}<br>"
-                    f"Qty Traded: {r[QUANTITY_TRADED_COL]:.0f}<br>"
-                    f"Cumulative P&L: {r['Cumulative_PnL_calc']:,.2f}"
-                ),
-                axis=1,
-            ),
-        )
-
-        sell_marker = go.Scatter(
-            x=sell_trades[DATE_COL],
-            y=sell_trades["Open"],  # trade executed at open of the day
-            mode="markers",
-            marker=dict(size=16, color="red", symbol="arrow-down"),
-            name="SELL",
-            hoverinfo="text",
-            hovertext=sell_trades.apply(
-                lambda r: (
-                    f"SELL @ {r['Open']:.2f}<br>"
-                    f"Qty Traded: {r[QUANTITY_TRADED_COL]:.0f}<br>"
-                    f"Cumulative P&L: {r['Cumulative_PnL_calc']:,.2f}"
-                ),
-                axis=1,
-            ),
-        )
-
         # ---------------- Longs / Shorts Panel ---------------- #
         longs_line = go.Scatter(
             x=df[DATE_COL], y=df[LONG_COL], mode="lines",
@@ -251,8 +223,6 @@ def run_plotting():
         fig.add_trace(ema100_line, row=1, col=1)
         fig.add_trace(ema200_line, row=1, col=1)
         fig.add_trace(vwap_line, row=1, col=1)
-        fig.add_trace(buy_marker, row=1, col=1)
-        fig.add_trace(sell_marker, row=1, col=1)
 
         # OI PANEL
         fig.add_trace(longs_line, row=2, col=1)
@@ -260,15 +230,19 @@ def run_plotting():
         fig.add_trace(shorts_line, row=2, col=1)
         fig.add_trace(ema5_shorts_line, row=2, col=1)
 
-        # ---------------- PAIR NUMBERING + ARROW CONNECTOR ---------------- #
-        # Use Net_Qty (=Position) transitions to infer entries/exits
-        df["Prev_Net_Qty"] = df["Net_Qty"].shift(1).fillna(0)
+        print("2.")
+        # ---------------- ENTRY / EXIT TRIANGLES + PAIR LOGIC + TRADELIST ---------------- #
+        entry_x, entry_y, entry_text, entry_color = [], [], [], []
+        exit_x, exit_y, exit_text, exit_color = [], [], [], []
+
+        trade_records = []
+        current_entry = None  # for TradeList
 
         pair_id = 1
         active_pair = None
         active_type = None
-        entry_price = None
-        entry_time = None
+        pair_entry_price = None
+        pair_entry_time = None
 
         for idx, row in df.iterrows():
             qty_traded = row[QUANTITY_TRADED_COL]
@@ -276,17 +250,234 @@ def run_plotting():
             curr_qty = row["Net_Qty"]
 
             if qty_traded == 0:
-                continue
+                continue  # no trade this bar
 
-            price = row["Open"]  # mark pair at execution price
-            time = row[DATE_COL]
+            dt = row[DATE_COL]
+            price = row["Open"]
+            cumulative = row["Cumulative_PnL_calc"]
 
-            # -------- ENTRY -------- #
-            if prev_qty == 0:
-                active_type = "LONG" if qty_traded > 0 else "SHORT"
+            prev_s = sign(prev_qty)
+            curr_s = sign(curr_qty)
+
+            # ---------- CASE 1: PURE ENTRY (0 -> non-zero) ----------
+            if prev_qty == 0 and curr_qty != 0:
+                direction = "LONG" if curr_qty > 0 else "SHORT"
+
+                entry_x.append(dt)
+                entry_y.append(price)
+                entry_text.append(f"{direction} ENTRY ({pair_id})")
+                entry_color.append("lime" if direction == "LONG" else "red")
+
                 active_pair = pair_id
-                entry_price = price
-                entry_time = time
+                active_type = direction
+                pair_entry_price = price
+                pair_entry_time = dt
+
+                fig.add_annotation(
+                    x=1.0, y=price,
+                    text=f"{active_type} ({pair_id})",
+                    showarrow=False,
+                    font=dict(size=10, color="lime" if active_type == "LONG" else "red"),
+                    xanchor="left",
+                    yanchor="middle",
+                    xref="paper", yref="y1",
+                )
+
+                current_entry = {
+                    "Entry_Date": dt,
+                    "Entry_Row": idx,
+                    "Entry_Price": price,
+                    "Qty": curr_qty,
+                    "Cumulative_At_Entry": cumulative,
+                }
+                continue
+            
+            print("3.")
+            # ---------- CASE 2: PURE EXIT (non-zero -> 0) ----------
+            if prev_qty != 0 and curr_qty == 0:
+                direction = "LONG" if prev_qty > 0 else "SHORT"
+
+                exit_x.append(dt)
+                exit_y.append(price)
+                exit_text.append(f"{direction} EXIT ({pair_id})")
+                exit_color.append("lime" if direction == "LONG" else "red")
+
+                # Pair connector
+                if active_pair is not None and pair_entry_time is not None:
+                    cover_type = "LONG COVER" if active_type == "LONG" else "SHORT COVER"
+
+                    fig.add_annotation(
+                        x=1.0, y=price,
+                        text=f"{cover_type} ({active_pair})",
+                        showarrow=False,
+                        font=dict(size=10, color="lime" if active_type == "LONG" else "red"),
+                        xanchor="left",
+                        yanchor="middle",
+                        xref="paper", yref="y1",
+                    )
+
+                    fig.add_shape(
+                        type="line",
+                        x0=pair_entry_time, y0=pair_entry_price,
+                        x1=dt, y1=price,
+                        xref="x1", yref="y1",
+                        line=dict(
+                            width=2,
+                            dash="dot",
+                            color="lime" if active_type == "LONG" else "red",
+                        ),
+                    )
+
+                    fig.add_annotation(
+                        x=dt,
+                        y=price,
+                        ax=pair_entry_time,
+                        ay=pair_entry_price,
+                        xref="x1",
+                        yref="y1",
+                        axref="x1",
+                        ayref="y1",
+                        showarrow=True,
+                        arrowhead=3,
+                        arrowsize=2,
+                        arrowcolor="lime" if active_type == "LONG" else "red",
+                    )
+
+                # TradeList close
+                if current_entry is not None:
+                    entry_idx = current_entry["Entry_Row"]
+                    entry_date = current_entry["Entry_Date"]
+                    entry_price = current_entry["Entry_Price"]
+                    qty = current_entry["Qty"]
+                    trade_direction = "LONG" if qty > 0 else "SHORT"
+
+                    trade_pnl = cumulative - current_entry["Cumulative_At_Entry"]
+                    trade_days = (dt - entry_date).days
+
+                    if trade_direction == "LONG":
+                        ret_pct = ((price - entry_price) / entry_price) * 100.0
+                    else:
+                        ret_pct = ((entry_price - price) / entry_price) * 100.0
+
+                    trade_records.append({
+                        "Entry_Row": entry_idx,
+                        "Exit_Row": idx,
+                        "Trade_PnL": trade_pnl,
+                        "Cumulative_PnL_At_Entry": current_entry["Cumulative_At_Entry"],
+                        "Cumulative_PnL_At_Exit": cumulative,
+                        "Entry_Date": entry_date,
+                        "Exit_Date": dt,
+                        "Trade_Days": trade_days,
+                        "Direction": trade_direction,
+                        "Qty": qty,
+                        "Entry_Price": entry_price,
+                        "Exit_Price": price,
+                        "Return_%": ret_pct,
+                    })
+
+                pair_id += 1
+                active_pair = None
+                active_type = None
+                pair_entry_price = None
+                pair_entry_time = None
+                current_entry = None
+                continue
+                print("4.")
+            # ---------- CASE 3: REVERSAL (non-zero -> non-zero, sign change) ----------
+            if prev_qty != 0 and curr_qty != 0 and prev_s != 0 and curr_s != 0 and prev_s != curr_s:
+                # 3A: treat as EXIT for old direction
+                old_direction = "LONG" if prev_qty > 0 else "SHORT"
+
+                exit_x.append(dt)
+                exit_y.append(price)
+                exit_text.append(f"{old_direction} EXIT ({pair_id})")
+                exit_color.append("lime" if old_direction == "LONG" else "red")
+
+                if active_pair is not None and pair_entry_time is not None:
+                    cover_type = "LONG COVER" if active_type == "LONG" else "SHORT COVER"
+
+                    fig.add_annotation(
+                        x=1.0, y=price,
+                        text=f"{cover_type} ({active_pair})",
+                        showarrow=False,
+                        font=dict(size=10, color="lime" if active_type == "LONG" else "red"),
+                        xanchor="left",
+                        yanchor="middle",
+                        xref="paper", yref="y1",
+                    )
+
+                    fig.add_shape(
+                        type="line",
+                        x0=pair_entry_time, y0=pair_entry_price,
+                        x1=dt, y1=price,
+                        xref="x1", yref="y1",
+                        line=dict(
+                            width=2,
+                            dash="dot",
+                            color="lime" if active_type == "LONG" else "red",
+                        ),
+                    )
+
+                    fig.add_annotation(
+                        x=dt,
+                        y=price,
+                        ax=pair_entry_time,
+                        ay=pair_entry_price,
+                        xref="x1",
+                        yref="y1",
+                        axref="x1",
+                        ayref="y1",
+                        showarrow=True,
+                        arrowhead=3,
+                        arrowsize=2,
+                        arrowcolor="lime" if active_type == "LONG" else "red",
+                    )
+
+                if current_entry is not None:
+                    entry_idx = current_entry["Entry_Row"]
+                    entry_date = current_entry["Entry_Date"]
+                    entry_price = current_entry["Entry_Price"]
+                    qty = current_entry["Qty"]
+                    trade_direction = "LONG" if qty > 0 else "SHORT"
+
+                    trade_pnl = cumulative - current_entry["Cumulative_At_Entry"]
+                    trade_days = (dt - entry_date).days
+
+                    if trade_direction == "LONG":
+                        ret_pct = ((price - entry_price) / entry_price) * 100.0
+                    else:
+                        ret_pct = ((entry_price - price) / entry_price) * 100.0
+
+                    trade_records.append({
+                        "Entry_Row": entry_idx,
+                        "Exit_Row": idx,
+                        "Trade_PnL": trade_pnl,
+                        "Cumulative_PnL_At_Entry": current_entry["Cumulative_At_Entry"],
+                        "Cumulative_PnL_At_Exit": cumulative,
+                        "Entry_Date": entry_date,
+                        "Exit_Date": dt,
+                        "Trade_Days": trade_days,
+                        "Direction": trade_direction,
+                        "Qty": qty,
+                        "Entry_Price": entry_price,
+                        "Exit_Price": price,
+                        "Return_%": ret_pct,
+                    })
+
+                pair_id += 1
+
+                # 3B: treat as ENTRY for new direction
+                new_direction = "LONG" if curr_qty > 0 else "SHORT"
+
+                entry_x.append(dt)
+                entry_y.append(price)
+                entry_text.append(f"{new_direction} ENTRY ({pair_id})")
+                entry_color.append("lime" if new_direction == "LONG" else "red")
+
+                active_pair = pair_id
+                active_type = new_direction
+                pair_entry_price = price
+                pair_entry_time = dt
 
                 fig.add_annotation(
                     x=1.0, y=price,
@@ -297,56 +488,42 @@ def run_plotting():
                     yanchor="middle",
                     xref="paper", yref="y1",
                 )
+
+                current_entry = {
+                    "Entry_Date": dt,
+                    "Entry_Row": idx,
+                    "Entry_Price": price,
+                    "Qty": curr_qty,
+                    "Cumulative_At_Entry": cumulative,
+                }
                 continue
 
-            # -------- EXIT -------- #
-            if curr_qty == 0 and active_pair is not None:
-                cover_type = "LONG COVER" if active_type == "LONG" else "SHORT COVER"
+            # Any other odd case is ignored.
 
-                fig.add_annotation(
-                    x=1.0, y=price,
-                    text=f"{cover_type} ({active_pair})",
-                    showarrow=False,
-                    font=dict(size=10, color="lime" if active_type == "LONG" else "red"),
-                    xanchor="left",
-                    yanchor="middle",
-                    xref="paper", yref="y1",
-                )
+        # ---------------- ADD TRIANGLE TRACES ---------------- #
+        print("5.")
+        entry_markers = go.Scatter(
+            x=entry_x,
+            y=entry_y,
+            mode="markers",
+            marker=dict(size=18, symbol="triangle-up", color=entry_color),
+            name="Entry",
+            hoverinfo="text",
+            hovertext=entry_text,
+        )
 
-                # connector line
-                fig.add_shape(
-                    type="line",
-                    x0=entry_time, y0=entry_price,
-                    x1=time, y1=price,
-                    xref="x1", yref="y1",
-                    line=dict(
-                        width=2,
-                        dash="dot",
-                        color="lime" if active_type == "LONG" else "red",
-                    )
-                )
+        exit_markers = go.Scatter(
+            x=exit_x,
+            y=exit_y,
+            mode="markers",
+            marker=dict(size=18, symbol="triangle-down", color=exit_color),
+            name="Exit",
+            hoverinfo="text",
+            hovertext=exit_text,
+        )
 
-                # arrow from entry to exit
-                fig.add_annotation(
-                    x=time,
-                    y=price,
-                    ax=entry_time,
-                    ay=entry_price,
-                    xref="x1",
-                    yref="y1",
-                    axref="x1",
-                    ayref="y1",
-                    showarrow=True,
-                    arrowhead=3,
-                    arrowsize=2,
-                    arrowcolor="lime" if active_type == "LONG" else "red"
-                )
-
-                pair_id += 1
-                active_pair = None
-                active_type = None
-                entry_price = None
-                entry_time = None
+        fig.add_trace(entry_markers, row=1, col=1)
+        fig.add_trace(exit_markers, row=1, col=1)
 
         # ---------------- LAYOUT ---------------- #
         fig.update_layout(
@@ -356,7 +533,6 @@ def run_plotting():
             dragmode="pan",
         )
 
-        # EMA / VWAP legend in a single top row
         fig.update_layout(
             legend=dict(
                 orientation="h",
@@ -387,6 +563,78 @@ def run_plotting():
             xref="paper",
             yref="paper",
         )
+
+        # ---------------- EXPORT TRADE LIST TO EXCEL (FINAL) ---------------- #
+        trades_df = pd.DataFrame(trade_records)
+
+        if not trades_df.empty:
+            # MAE/MFE using CLOSE only
+            maes, mfes = [], []
+
+            for _, trow in trades_df.iterrows():
+                entry_idx = int(trow["Entry_Row"])
+                exit_idx = int(trow["Exit_Row"])
+                entry_price = trow["Entry_Price"]
+                direction = trow["Direction"]
+
+                closes = df.iloc[entry_idx:exit_idx+1][CLOSE_COL].values
+
+                if direction == "LONG":
+                    diffs = closes - entry_price
+                else:
+                    diffs = entry_price - closes
+
+                maes.append(diffs.min())
+                mfes.append(diffs.max())
+
+            trades_df["MAE"] = maes
+            trades_df["MFE"] = mfes
+
+            # Sort & cumulative trade PnL
+            trades_df = trades_df.sort_values(by="Entry_Date").reset_index(drop=True)
+            trades_df["Cumulative_Trade_PnL"] = trades_df["Trade_PnL"].cumsum()
+
+            # Format dates as dd-MM-yy (force datetime first)
+            trades_df["Entry_Date"] = pd.to_datetime(trades_df["Entry_Date"]).dt.strftime("%d-%m-%y")
+            trades_df["Exit_Date"] = pd.to_datetime(trades_df["Exit_Date"]).dt.strftime("%d-%m-%y")
+
+            # Drop internal row index columns
+            trades_df = trades_df.drop(columns=["Entry_Row", "Exit_Row"])
+
+            print("6.")
+            # Final column order (Option A)
+            trades_df = trades_df[
+                [
+                    "Trade_PnL",
+                    "Cumulative_Trade_PnL",
+                    "Cumulative_PnL_At_Entry",
+                    "Cumulative_PnL_At_Exit",
+                    "Entry_Date",
+                    "Exit_Date",
+                    "Trade_Days",
+                    "Direction",
+                    "Qty",
+                    "Entry_Price",
+                    "Exit_Price",
+                    "Return_%",
+                    "MAE",
+                    "MFE",
+                ]
+            ]
+
+            trade_output_file = os.path.join(TARGET_DIR, f"{SYMBOL}_TradeList.xlsx")
+            trades_df.to_excel(trade_output_file, index=False)
+
+            # Freeze header row
+            wb = load_workbook(trade_output_file)
+            ws = wb.active
+            ws.freeze_panes = "A2"  # freeze first row
+            wb.save(trade_output_file)
+
+            print("\nTrade List Excel (FINAL) created at:")
+            print(trade_output_file)
+        else:
+            print("\nNo completed trades found; TradeList Excel not created.")
 
         # ---------------- SAVE HTML ---------------- #
         plot(

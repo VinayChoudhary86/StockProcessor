@@ -32,7 +32,7 @@ if __name__ == "__main__":
     print(" V- RUNNING FULL PIPELINE ")
     print("========================")
 
-    run_script(SCRIPT_1)   # Step 1 → Train ML
+    # run_script(SCRIPT_1)   # Step 1 → Train ML
     run_script(SCRIPT_2)   # Step 2 → Generate Analysis
     run_script(SCRIPT_3)   # Step 3 → Generate Trades
     run_script(SCRIPT_4)   # Step 4 → Generate final Plotly chart
