@@ -1,6 +1,5 @@
 import os
 import math
-import warnings
 from typing import List, Tuple
 
 import numpy as np
@@ -25,6 +24,7 @@ INPUT_FILE = os.path.join(TARGET_DIR, ANALYSIS_FILE_NAME)
 OUTPUT_FILE = os.path.join(TARGET_DIR, f"{SYMBOL}_Trades_ML.csv")
 
 DATE_COL = "DATE"
+OPEN_COL = "OPEN"          # from *_Analysis.csv
 CLOSE_COL = "close"
 VWAP_COL = "vwap"
 LONG_TILL_NOW_COL = "Longs Till Now"
@@ -38,7 +38,7 @@ OI_SUM_COL = "Daily_Open_Interest_Sum"
 def clean_data(df: pd.DataFrame) -> pd.DataFrame:
     required_cols = [DATE_COL, CLOSE_COL, LONG_TILL_NOW_COL,
                      SHORT_TILL_NOW_COL, OI_SUM_COL]
-    optional_numeric_cols = [VWAP_COL]
+    optional_numeric_cols = [VWAP_COL, OPEN_COL]
 
     df.columns = df.columns.str.strip()
 
@@ -63,7 +63,7 @@ def clean_data(df: pd.DataFrame) -> pd.DataFrame:
     df.sort_values(DATE_COL, inplace=True)
 
     # Forward fill numeric gaps where reasonable
-    for col in [CLOSE_COL, VWAP_COL, LONG_TILL_NOW_COL,
+    for col in [OPEN_COL, CLOSE_COL, VWAP_COL, LONG_TILL_NOW_COL,
                 SHORT_TILL_NOW_COL, OI_SUM_COL]:
         if col in df.columns:
             df[col] = df[col].ffill()
@@ -129,8 +129,7 @@ def add_features(df: pd.DataFrame) -> pd.DataFrame:
         "long_5ch", "short_5ch"
     ]
     for col in feature_cols:
-        df[col].replace([np.inf, -np.inf], 0.0, inplace=True)
-        df[col] = df[col].fillna(0.0)
+        df[col] = df[col].replace([np.inf, -np.inf], 0.0).fillna(0.0)
 
     return df
 
@@ -230,9 +229,15 @@ def simulate_trades_with_model(df: pd.DataFrame,
                                prob_short: float = 0.55) -> pd.DataFrame:
     """
     Use model predictions to generate trades.
-    - Map model outputs to {-1,0,1} signals (short / flat / long).
-    - Trade at close, hold until opposite signal.
+
+    Timeline:
+      - On day t, model uses day-t data → produces ML_Signal[t].
+      - That signal is executed at **OPEN of day t+1**.
+      - Quantities are sized as floor(INVESTMENT_AMOUNT / next_day_open).
+      - P&L is computed close-to-close using the position effective for that day.
     """
+
+    df = df.copy()
 
     # Map {0,1,2} back to {-1,0,1}
     inv_class_map = {0: -1, 1: 0, 2: 1}
@@ -242,14 +247,10 @@ def simulate_trades_with_model(df: pd.DataFrame,
     pred_conf = proba.max(axis=1)
     pred_label = np.array([inv_class_map[c] for c in pred_class_mapped])
 
-    df = df.copy()
-    df["ML_Label"] = pred_label
-    df["ML_Conf"] = pred_conf
+    df.loc[:, "ML_Label"] = pred_label
+    df.loc[:, "ML_Conf"] = pred_conf
 
     # Convert label + confidence into trading signal
-    #  1 -> BUY if conf >= prob_long
-    # -1 -> SELL if conf >= prob_short
-    #  0 or low conf -> HOLD
     signals = []
     for lbl, conf in zip(pred_label, pred_conf):
         if lbl == 1 and conf >= prob_long:
@@ -258,55 +259,83 @@ def simulate_trades_with_model(df: pd.DataFrame,
             signals.append("SELL")
         else:
             signals.append("HOLD")
-    df["ML_Signal"] = signals
+    df.loc[:, "ML_Signal"] = signals
 
-    # Initialize trade bookkeeping
-    df["Quantity_Traded"] = 0
-    df["Position"] = 0
-    df["Daily_PnL"] = 0.0
+    if OPEN_COL not in df.columns:
+        raise KeyError(f"Required column '{OPEN_COL}' (open price) not found for trade execution.")
 
-    position = 0
-    prev_close = df[CLOSE_COL].iloc[0]
+    # Ensure OPEN numeric and no NaNs
+    df.loc[:, OPEN_COL] = pd.to_numeric(df[OPEN_COL], errors="coerce").ffill()
+    df.loc[:, CLOSE_COL] = pd.to_numeric(df[CLOSE_COL], errors="coerce").ffill()
 
-    for i in range(len(df)):
-        price = df[CLOSE_COL].iloc[i]
-        signal = df["ML_Signal"].iloc[i]
+    n = len(df)
+    quantity_traded = np.zeros(n, dtype=float)
+    position_arr = np.zeros(n, dtype=float)
 
-        # PnL from yesterday's position
-        if i > 0:
-            df.loc[i, "Daily_PnL"] = (price - prev_close) * position
-        prev_close = price
+    position = 0.0
 
-        qty_traded = 0
+    signals_arr = df["ML_Signal"].to_numpy()
+    opens = df[OPEN_COL].to_numpy()
 
-        # Exit conditions
+    # Day 0: no prior signal to trade on; remains flat
+    position_arr[0] = 0.0
+    quantity_traded[0] = 0.0
+
+    # For day t >= 1: execute signal from day t-1 at OPEN[t]
+    for t in range(1, n):
+        signal_prev = signals_arr[t - 1]
+        exec_price = opens[t]
+        qty_trade = 0.0
+
+        # ----- EXIT / FLATTEN at today's open based on yesterday's signal -----
         if position > 0:
-            if signal in ["SELL", "HOLD"]:  # either flip or flatten
-                qty_traded = -position
-                position = 0
+            if signal_prev in ["SELL", "HOLD"]:
+                qty_trade += -position
+                position = 0.0
 
         elif position < 0:
-            if signal in ["BUY", "HOLD"]:
-                qty_traded = -position
-                position = 0
+            if signal_prev in ["BUY", "HOLD"]:
+                qty_trade += -position
+                position = 0.0
 
-        # Entry conditions (only when flat)
-        if position == 0:
-            if signal == "BUY":
-                qty = math.floor(INVESTMENT_AMOUNT / price) if price > 0 else 0
+        # ----- ENTRY at today's open (only if flat) -----
+        if position == 0.0:
+            if signal_prev == "BUY":
+                if exec_price > 0:
+                    qty = math.floor(INVESTMENT_AMOUNT / exec_price)
+                else:
+                    qty = 0
                 if qty > 0:
-                    qty_traded = qty
+                    qty_trade += qty
                     position = qty
-            elif signal == "SELL":
-                qty = math.floor(INVESTMENT_AMOUNT / price) if price > 0 else 0
+
+            elif signal_prev == "SELL":
+                if exec_price > 0:
+                    qty = math.floor(INVESTMENT_AMOUNT / exec_price)
+                else:
+                    qty = 0
                 if qty > 0:
-                    qty_traded = -qty
+                    qty_trade += -qty
                     position = -qty
 
-        df.loc[i, "Quantity_Traded"] = qty_traded
-        df.loc[i, "Position"] = position
+        quantity_traded[t] = qty_trade
+        position_arr[t] = position
 
-    df["Cumulative_PnL"] = df["Daily_PnL"].cumsum()
+    df.loc[:, "Quantity_Traded"] = quantity_traded
+    df.loc[:, "Position"] = position_arr
+
+    # ---------------- P&L CALCULATION ---------------- #
+    # Position is effective for the day; PnL is close-to-close using today's position
+    df.loc[:, "Prev_Close"] = df[CLOSE_COL].shift(1).ffill()
+    df.loc[:, "Daily_PnL"] = (df[CLOSE_COL] - df["Prev_Close"]) * df["Position"]
+
+    # First day has no PnL
+    if len(df) > 0:
+        first_idx = df.index[0]
+        df.loc[first_idx, "Daily_PnL"] = 0.0
+
+    df.loc[:, "Cumulative_PnL"] = df["Daily_PnL"].cumsum()
+
     return df
 
 
@@ -341,14 +370,19 @@ def run_pipeline():
 
     model = train_xgb_model(X, y)
 
-    df_trades = simulate_trades_with_model(df_labeled, model, X,
-                                           prob_long=0.55, prob_short=0.55)
+    df_trades = simulate_trades_with_model(
+        df_labeled, model, X,
+        prob_long=0.55, prob_short=0.55
+    )
 
     # Build final output with familiar structure
     output_cols = [
-        DATE_COL, CLOSE_COL,
+        DATE_COL,
+        OPEN_COL if OPEN_COL in df_trades.columns else None,
+        CLOSE_COL,
         VWAP_COL if VWAP_COL in df_trades.columns else None,
-        LONG_TILL_NOW_COL, SHORT_TILL_NOW_COL,
+        LONG_TILL_NOW_COL,
+        SHORT_TILL_NOW_COL,
         OI_SUM_COL,
         "ML_Signal", "ML_Label", "ML_Conf",
         "Quantity_Traded", "Position",
@@ -356,7 +390,7 @@ def run_pipeline():
     ]
     output_cols = [c for c in output_cols if c in df_trades.columns]
 
-    df_trades[output_cols].to_csv(OUTPUT_FILE, index=False)
+    df_trades.to_csv(OUTPUT_FILE, index=False)
 
     print(f"\nSaved ML trade file: {OUTPUT_FILE}")
     print(f"Final PnL (ML strategy): {df_trades['Cumulative_PnL'].iloc[-1]:,.2f}")

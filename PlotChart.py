@@ -1,5 +1,3 @@
-# PlotChart.py
-
 import os
 import pandas as pd
 import plotly.graph_objects as go
@@ -13,13 +11,15 @@ cfg = load_config()
 TARGET_DIR = cfg["TARGET_DIRECTORY"]
 SYMBOL = cfg["SYMBOL"]
 
-TRADES_INPUT_FILE_NAME = f"{SYMBOL}_Trades.csv"
+# NOTE: now reading ML trades file
+TRADES_INPUT_FILE_NAME = f"{SYMBOL}_Trades_ML.csv"
 CHART_OUTPUT_FILE_NAME = f"{SYMBOL}_Chart.html"
 
 INPUT_FILE = os.path.join(TARGET_DIR, TRADES_INPUT_FILE_NAME)
 OUTPUT_INTERACTIVE_CHART_FILE = os.path.join(TARGET_DIR, CHART_OUTPUT_FILE_NAME)
 
 DATE_COL = "DATE"
+OPEN_COL = "OPEN"
 CLOSE_COL = "close"
 VWAP_COL = "vwap"
 QUANTITY_TRADED_COL = "Quantity_Traded"
@@ -28,7 +28,7 @@ SHORT_COL = "Shorts Till Now"
 
 
 def run_plotting():
-    print("\n--- Plotly Interactive Chart Generator ---\n")
+    print("\n--- Plotly Interactive Chart Generator (ML Trades) ---\n")
     print("Reading trades from:", INPUT_FILE)
 
     if not os.path.exists(INPUT_FILE):
@@ -42,25 +42,45 @@ def run_plotting():
         df.sort_values(DATE_COL, inplace=True)
         df.reset_index(drop=True, inplace=True)
 
-        for col in [CLOSE_COL, VWAP_COL, QUANTITY_TRADED_COL, LONG_COL, SHORT_COL]:
-            if col in df.columns:
-                df[col] = pd.to_numeric(df[col], errors="coerce")
-            else:
+        # Required columns
+        required_cols = [
+            DATE_COL, OPEN_COL, CLOSE_COL, VWAP_COL,
+            QUANTITY_TRADED_COL, LONG_COL, SHORT_COL,
+            "Position", "Daily_PnL", "Cumulative_PnL"
+        ]
+        for col in required_cols:
+            if col not in df.columns:
                 raise KeyError(f"Required column '{col}' missing in trades file.")
 
+        # Numeric cleanup
+        df[OPEN_COL] = pd.to_numeric(df[OPEN_COL], errors="coerce")
+        df[CLOSE_COL] = pd.to_numeric(df[CLOSE_COL], errors="coerce")
+        df[VWAP_COL] = pd.to_numeric(df[VWAP_COL], errors="coerce")
+        df[QUANTITY_TRADED_COL] = pd.to_numeric(df[QUANTITY_TRADED_COL], errors="coerce")
+        df[LONG_COL] = pd.to_numeric(df[LONG_COL], errors="coerce")
+        df[SHORT_COL] = pd.to_numeric(df[SHORT_COL], errors="coerce")
+        df["Position"] = pd.to_numeric(df["Position"], errors="coerce")
+        df["Daily_PnL"] = pd.to_numeric(df["Daily_PnL"], errors="coerce")
+        df["Cumulative_PnL"] = pd.to_numeric(df["Cumulative_PnL"], errors="coerce")
+
+        # Fill NaNs
+        df[OPEN_COL] = df[OPEN_COL].ffill()
         df[CLOSE_COL] = df[CLOSE_COL].ffill()
         df[VWAP_COL] = df[VWAP_COL].ffill()
-
         df[QUANTITY_TRADED_COL] = df[QUANTITY_TRADED_COL].fillna(0)
         df[LONG_COL] = df[LONG_COL].fillna(0)
         df[SHORT_COL] = df[SHORT_COL].fillna(0)
+        df["Position"] = df["Position"].fillna(0)
+        df["Daily_PnL"] = df["Daily_PnL"].fillna(0)
+        df["Cumulative_PnL"] = df["Cumulative_PnL"].fillna(0)
 
         # ---------------- POSITION & PNL LOGIC ---------------- #
-        df["Net_Qty"] = df[QUANTITY_TRADED_COL].cumsum()
+        # Net_Qty = ML Position (already cumulative)
+        df["Net_Qty"] = df["Position"]
 
-        df["Prev_Close"] = df[CLOSE_COL].shift(1).ffill()
-        df["Daily_PnL_calc"] = (df[CLOSE_COL] - df["Prev_Close"]) * df["Net_Qty"]
-        df["Cumulative_PnL_calc"] = df["Daily_PnL_calc"].cumsum()
+        # Use ML PnL directly
+        df["Daily_PnL_calc"] = df["Daily_PnL"]
+        df["Cumulative_PnL_calc"] = df["Cumulative_PnL"]
 
         # ---------------- INDICATORS ---------------- #
         df["EMA_9"] = df[CLOSE_COL].ewm(span=9, adjust=False).mean()
@@ -71,15 +91,14 @@ def run_plotting():
         df["EMA_5_Longs"] = df[LONG_COL].ewm(span=5, adjust=False).mean()
         df["EMA_5_Shorts"] = df[SHORT_COL].ewm(span=5, adjust=False).mean()
 
-        # Build synthetic OHLC
-        df["Open"] = df[CLOSE_COL].shift(1).fillna(df[CLOSE_COL].iloc[0])
+        # ---------------- OHLC FOR CANDLE ---------------- #
+        # Use real OPEN from ML file, synthesize HIGH/LOW around open/close
+        df["Open"] = df[OPEN_COL]  # alias for plotting
         range_pct = 0.005
         df["High"] = df[[CLOSE_COL, "Open"]].max(axis=1) * (1 + range_pct)
         df["Low"] = df[[CLOSE_COL, "Open"]].min(axis=1) * (1 - range_pct)
 
         # ---------------- CLOSE vs EMA50 GAP % + COLOR ---------------- #
-        # Gap = how far CLOSE is from its 50-EMA, in %
-        # (Close - EMA50) / EMA50 * 100
         df["EMA50_Close_Gap_Pct"] = ((df[CLOSE_COL] - df["EMA_50"]) * 100 / df["EMA_50"]).round(2)
 
         def gap_color(gap):
@@ -125,48 +144,92 @@ def run_plotting():
             hoverinfo="text",
         )
 
-        ema9_line = go.Scatter(x=df[DATE_COL], y=df["EMA_9"], mode="lines", name="EMA 9", line=dict(width=1.2, color="yellow"))
-        ema21_line = go.Scatter(x=df[DATE_COL], y=df["EMA_21"], mode="lines", name="EMA 21", line=dict(width=1.2, color="cyan"))
-        ema50_line = go.Scatter(x=df[DATE_COL], y=df["EMA_50"], mode="lines", name="EMA 50", line=dict(width=1.2, color="magenta"))
-        ema100_line = go.Scatter(x=df[DATE_COL], y=df["EMA_100"], mode="lines", name="EMA 100", line=dict(width=1.5, color="white"))
-        ema200_line = go.Scatter(x=df[DATE_COL], y=df["EMA_200"], mode="lines", name="EMA 200", line=dict(width=1.5, color="lightgray"))
-        vwap_line = go.Scatter(x=df[DATE_COL], y=df[VWAP_COL], mode="lines", name="VWAP", line=dict(width=1.5, color="orange"))
+        ema9_line = go.Scatter(
+            x=df[DATE_COL], y=df["EMA_9"],
+            mode="lines", name="EMA 9",
+            line=dict(width=1.2, color="yellow")
+        )
+        ema21_line = go.Scatter(
+            x=df[DATE_COL], y=df["EMA_21"],
+            mode="lines", name="EMA 21",
+            line=dict(width=1.2, color="cyan")
+        )
+        ema50_line = go.Scatter(
+            x=df[DATE_COL], y=df["EMA_50"],
+            mode="lines", name="EMA 50",
+            line=dict(width=1.2, color="magenta")
+        )
+        ema100_line = go.Scatter(
+            x=df[DATE_COL], y=df["EMA_100"],
+            mode="lines", name="EMA 100",
+            line=dict(width=1.5, color="white")
+        )
+        ema200_line = go.Scatter(
+            x=df[DATE_COL], y=df["EMA_200"],
+            mode="lines", name="EMA 200",
+            line=dict(width=1.5, color="lightgray")
+        )
+        vwap_line = go.Scatter(
+            x=df[DATE_COL], y=df[VWAP_COL],
+            mode="lines", name="VWAP",
+            line=dict(width=1.5, color="orange")
+        )
 
-        # ------------- BUY / SELL ARROWS ---------------- #
+        # ------------- BUY / SELL ARROWS (Option B: based only on Quantity_Traded sign) ---------------- #
         buy_trades = df[df[QUANTITY_TRADED_COL] > 0]
         sell_trades = df[df[QUANTITY_TRADED_COL] < 0]
 
         buy_marker = go.Scatter(
             x=buy_trades[DATE_COL],
-            y=buy_trades[CLOSE_COL],
+            y=buy_trades["Open"],  # trade executed at open of the day
             mode="markers",
             marker=dict(size=16, color="lime", symbol="arrow-up"),
             name="BUY",
             hoverinfo="text",
             hovertext=buy_trades.apply(
-                lambda r: f"BUY @ {r[CLOSE_COL]:.2f}<br>Net Qty: {r['Net_Qty']:.0f}",
+                lambda r: (
+                    f"BUY @ {r['Open']:.2f}<br>"
+                    f"Qty Traded: {r[QUANTITY_TRADED_COL]:.0f}<br>"
+                    f"Cumulative P&L: {r['Cumulative_PnL_calc']:,.2f}"
+                ),
                 axis=1,
             ),
         )
 
         sell_marker = go.Scatter(
             x=sell_trades[DATE_COL],
-            y=sell_trades[CLOSE_COL],
+            y=sell_trades["Open"],  # trade executed at open of the day
             mode="markers",
             marker=dict(size=16, color="red", symbol="arrow-down"),
             name="SELL",
             hoverinfo="text",
             hovertext=sell_trades.apply(
-                lambda r: f"SELL @ {r[CLOSE_COL]:.2f}<br>Net Qty: {r['Net_Qty']:.0f}",
+                lambda r: (
+                    f"SELL @ {r['Open']:.2f}<br>"
+                    f"Qty Traded: {r[QUANTITY_TRADED_COL]:.0f}<br>"
+                    f"Cumulative P&L: {r['Cumulative_PnL_calc']:,.2f}"
+                ),
                 axis=1,
             ),
         )
 
         # ---------------- Longs / Shorts Panel ---------------- #
-        longs_line = go.Scatter(x=df[DATE_COL], y=df[LONG_COL], mode="lines", name="Longs Till Now", line=dict(width=2, color="lime"))
-        ema5_longs_line = go.Scatter(x=df[DATE_COL], y=df["EMA_5_Longs"], mode="lines", name="EMA 5 (Longs)", line=dict(width=1, color="green", dash="dot"))
-        shorts_line = go.Scatter(x=df[DATE_COL], y=df[SHORT_COL], mode="lines", name="Shorts Till Now", line=dict(width=2, color="red"))
-        ema5_shorts_line = go.Scatter(x=df[DATE_COL], y=df["EMA_5_Shorts"], mode="lines", name="EMA 5 (Shorts)", line=dict(width=1, color="darkred", dash="dot"))
+        longs_line = go.Scatter(
+            x=df[DATE_COL], y=df[LONG_COL], mode="lines",
+            name="Longs Till Now", line=dict(width=2, color="lime")
+        )
+        ema5_longs_line = go.Scatter(
+            x=df[DATE_COL], y=df["EMA_5_Longs"], mode="lines",
+            name="EMA 5 (Longs)", line=dict(width=1, color="green", dash="dot")
+        )
+        shorts_line = go.Scatter(
+            x=df[DATE_COL], y=df[SHORT_COL], mode="lines",
+            name="Shorts Till Now", line=dict(width=2, color="red")
+        )
+        ema5_shorts_line = go.Scatter(
+            x=df[DATE_COL], y=df["EMA_5_Shorts"], mode="lines",
+            name="EMA 5 (Shorts)", line=dict(width=1, color="darkred", dash="dot")
+        )
 
         # ---------------- FIGURE ---------------- #
         fig = make_subplots(
@@ -198,6 +261,7 @@ def run_plotting():
         fig.add_trace(ema5_shorts_line, row=2, col=1)
 
         # ---------------- PAIR NUMBERING + ARROW CONNECTOR ---------------- #
+        # Use Net_Qty (=Position) transitions to infer entries/exits
         df["Prev_Net_Qty"] = df["Net_Qty"].shift(1).fillna(0)
 
         pair_id = 1
@@ -214,7 +278,7 @@ def run_plotting():
             if qty_traded == 0:
                 continue
 
-            price = row[CLOSE_COL]
+            price = row["Open"]  # mark pair at execution price
             time = row[DATE_COL]
 
             # -------- ENTRY -------- #
@@ -262,7 +326,7 @@ def run_plotting():
                     )
                 )
 
-                # arrow
+                # arrow from entry to exit
                 fig.add_annotation(
                     x=time,
                     y=price,
@@ -290,6 +354,18 @@ def run_plotting():
             height=980,
             hovermode="x unified",
             dragmode="pan",
+        )
+
+        # EMA / VWAP legend in a single top row
+        fig.update_layout(
+            legend=dict(
+                orientation="h",
+                yanchor="bottom",
+                y=1.12,
+                xanchor="left",
+                x=0,
+                font=dict(size=12),
+            )
         )
 
         fig.update_yaxes(title="Price", row=1, col=1)
