@@ -1,15 +1,13 @@
+# GenerateMLTrades.py
 import os
 import math
 from typing import List, Tuple
+import pickle
 
 import numpy as np
 import pandas as pd
 
 from config_loader import load_config  # type: ignore
-
-# ML imports
-from xgboost import XGBClassifier
-from sklearn.metrics import classification_report, confusion_matrix
 
 # ---------------- CONFIG / CONSTANTS ---------------- #
 
@@ -22,6 +20,7 @@ SYMBOL = cfg["SYMBOL"]
 ANALYSIS_FILE_NAME = f"{SYMBOL}_Analysis.csv"
 INPUT_FILE = os.path.join(TARGET_DIR, ANALYSIS_FILE_NAME)
 OUTPUT_FILE = os.path.join(TARGET_DIR, f"{SYMBOL}_Trades_ML.csv")
+MODEL_FILE = os.path.join(TARGET_DIR, f"MODEL_{SYMBOL}.pkl")
 
 DATE_COL = "DATE"
 OPEN_COL = "OPEN"          # from *_Analysis.csv
@@ -30,6 +29,10 @@ VWAP_COL = "vwap"
 LONG_TILL_NOW_COL = "Longs Till Now"
 SHORT_TILL_NOW_COL = "Shorts Till Now"
 OI_SUM_COL = "Daily_Open_Interest_Sum"
+
+# Class mapping (must match TrainMLModel.py)
+CLASS_MAP = {-1: 0, 0: 1, 1: 2}
+INV_CLASS_MAP = {v: k for k, v in CLASS_MAP.items()}
 
 
 # ------------------------------------------------------------------------------------
@@ -173,57 +176,29 @@ def get_feature_matrix(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.Series, List[
 
 
 # ------------------------------------------------------------------------------------
-# MODEL TRAINING
+# LOAD TRAINED MODEL
 # ------------------------------------------------------------------------------------
-def train_xgb_model(X: pd.DataFrame, y: pd.Series) -> XGBClassifier:
-    """
-    Train XGBoost multi-class classifier on time series (simple split).
-    Uses first 70% as train, last 30% as validation for basic metrics.
-    """
-    n = len(X)
-    split_idx = int(n * 0.7)  # 70% train, 30% test (time-based)
-    X_train, X_test = X.iloc[:split_idx], X.iloc[split_idx:]
-    y_train, y_test = y.iloc[:split_idx], y.iloc[split_idx:]
+def load_trained_model():
+    if not os.path.exists(MODEL_FILE):
+        raise FileNotFoundError(f"Trained model file not found: {MODEL_FILE}")
 
-    # Map classes -1,0,1 to {0,1,2} for XGBoost
-    class_map = {-1: 0, 0: 1, 1: 2}
-    inv_class_map = {v: k for k, v in class_map.items()}
+    with open(MODEL_FILE, "rb") as f:
+        bundle = pickle.load(f)
 
-    y_train_mapped = y_train.map(class_map)
-    y_test_mapped = y_test.map(class_map)
+    model = bundle.get("model")
+    feature_cols = bundle.get("feature_cols")
 
-    model = XGBClassifier(
-        n_estimators=300,
-        max_depth=4,
-        learning_rate=0.05,
-        subsample=0.9,
-        colsample_bytree=0.9,
-        objective="multi:softprob",
-        num_class=3,
-        eval_metric="mlogloss",
-        tree_method="hist",
-        random_state=42,
-    )
+    if model is None or feature_cols is None:
+        raise ValueError("Invalid model bundle: missing 'model' or 'feature_cols'.")
 
-    model.fit(X_train, y_train_mapped)
-
-    # Basic evaluation
-    y_pred_mapped = model.predict(X_test)
-    y_pred = pd.Series(y_pred_mapped).map(inv_class_map)
-
-    print("\n--- ML MODEL EVALUATION (LAST 30% PERIOD) ---")
-    print(classification_report(y_test, y_pred))
-    print("Confusion Matrix:")
-    print(confusion_matrix(y_test, y_pred, labels=[-1, 0, 1]))
-
-    return model
+    return model, feature_cols
 
 
 # ------------------------------------------------------------------------------------
 # TRADING STRATEGY BASED ON MODEL PREDICTIONS
 # ------------------------------------------------------------------------------------
 def simulate_trades_with_model(df: pd.DataFrame,
-                               model: XGBClassifier,
+                               model,
                                X: pd.DataFrame,
                                prob_long: float = 0.55,
                                prob_short: float = 0.55) -> pd.DataFrame:
@@ -242,13 +217,10 @@ def simulate_trades_with_model(df: pd.DataFrame,
 
     df = df.copy()
 
-    # Map {0,1,2} back to {-1,0,1}
-    inv_class_map = {0: -1, 1: 0, 2: 1}
-
     proba = model.predict_proba(X)
     pred_class_mapped = np.argmax(proba, axis=1)
     pred_conf = proba.max(axis=1)
-    pred_label = np.array([inv_class_map[c] for c in pred_class_mapped])
+    pred_label = np.array([INV_CLASS_MAP[c] for c in pred_class_mapped])
 
     df.loc[:, "ML_Label"] = pred_label
     df.loc[:, "ML_Conf"] = pred_conf
@@ -275,7 +247,7 @@ def simulate_trades_with_model(df: pd.DataFrame,
     quantity_traded = np.zeros(n, dtype=float)
     position_arr = np.zeros(n, dtype=float)
 
-    # NEW: dynamic compounding capital (Option B: only on trade close)
+    # Dynamic compounding capital (updated only when trade closes)
     dynamic_capital = float(INVESTMENT_AMOUNT)
 
     # Track entry price & qty of current trade for realized PnL
@@ -348,7 +320,7 @@ def simulate_trades_with_model(df: pd.DataFrame,
     df.loc[:, "Quantity_Traded"] = quantity_traded
     df.loc[:, "Position"] = position_arr
 
-    # ---------------- P&L CALCULATION (unchanged) ---------------- #
+    # ---------------- P&L CALCULATION ---------------- #
     # Position is effective for the day; PnL is close-to-close using today's position
     df.loc[:, "Prev_Close"] = df[CLOSE_COL].shift(1).ffill()
     df.loc[:, "Daily_PnL"] = (df[CLOSE_COL] - df["Prev_Close"]) * df["Position"]
@@ -366,16 +338,21 @@ def simulate_trades_with_model(df: pd.DataFrame,
 # ------------------------------------------------------------------------------------
 # MAIN PIPELINE
 # ------------------------------------------------------------------------------------
-def run_pipeline():
-    print(f"--- ML-based F&O Trade Strategy (XGBoost) ---")
+def run_trading_pipeline():
+    print(f"--- ML-based F&O Trade Generation (XGBoost) ---")
     print(f"Input Data: {INPUT_FILE}")
+    print(f"Model File: {MODEL_FILE}")
 
     if not os.path.exists(INPUT_FILE):
         print(f"ERROR: Input file not found: {INPUT_FILE}")
         return
 
-    df_raw = pd.read_csv(INPUT_FILE, thousands=",")
+    if not os.path.exists(MODEL_FILE):
+        print(f"ERROR: Trained model file not found: {MODEL_FILE}")
+        print("Run TrainMLModel.py first to train and save the model.")
+        return
 
+    df_raw = pd.read_csv(INPUT_FILE, thousands=",")
     df_clean = clean_data(df_raw.copy())
     if df_clean.empty:
         print("ERROR: Data empty after cleaning.")
@@ -386,13 +363,12 @@ def run_pipeline():
     df_feat = add_features(df_clean.copy())
     df_labeled = build_labels(df_feat.copy(), up_thresh=0.002, down_thresh=-0.002)
 
-    X, y, feature_cols = get_feature_matrix(df_labeled)
+    X, y, _ = get_feature_matrix(df_labeled)
 
-    if len(X) < 200:
-        print("ERROR: Not enough data for ML training (need at least ~200 rows).")
-        return
+    model, feature_cols_model = load_trained_model()
 
-    model = train_xgb_model(X, y)
+    # Ensure we use the exact feature order used during training
+    X = df_labeled[feature_cols_model].copy()
 
     df_trades = simulate_trades_with_model(
         df_labeled, model, X,
@@ -416,9 +392,9 @@ def run_pipeline():
 
     df_trades.to_csv(OUTPUT_FILE, index=False)
 
-    print(f"\nSaved ML trade file: {OUTPUT_FILE}")
+    print(f"\n✔ Saved ML trade file: {OUTPUT_FILE}")
     print(f"Final PnL (ML strategy): {df_trades['Cumulative_PnL'].iloc[-1]:,.2f}")
 
 
 if __name__ == "__main__":
-    run_pipeline()
+    run_trading_pipeline()

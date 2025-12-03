@@ -3,11 +3,9 @@ import sys
 import os
 
 # --- Script file names (make sure these match exactly your filenames) ---
-SCRIPT_1 = "TrainModel.py"       # Analysis generator
+SCRIPT_1 = "GenerateThresholds.py"       # Analysis generator
 SCRIPT_2 = "GenerateAnalysis.py"
-# SCRIPT_3 = "GenerateTrades.py"   # Trade generator
-SCRIPT_3 = "MLTrader.py"
-SCRIPT_4 = "PlotChart.py"      # Interactive chart1
+SCRIPT_3 = "MLTrainer.py"
 
 # --- Helper to run a script ---
 def run_script(script_name):
@@ -32,9 +30,9 @@ if __name__ == "__main__":
     print(" V- RUNNING FULL PIPELINE ")
     print("========================")
 
-    # run_script(SCRIPT_1)   # Step 1 → Train ML
+    run_script(SCRIPT_1)   # Step 1 → Train ML
     run_script(SCRIPT_2)   # Step 2 → Generate Analysis
     run_script(SCRIPT_3)   # Step 3 → Generate Trades
-    run_script(SCRIPT_4)   # Step 4 → Generate final Plotly chart
+    # run_script(SCRIPT_4)   # Step 4 → Generate final Plotly chart
 
     print("\n🎉 ALL SCRIPTS EXECUTED SUCCESSFULLY!")
