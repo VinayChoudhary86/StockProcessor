@@ -233,8 +233,11 @@ def simulate_trades_with_model(df: pd.DataFrame,
     Timeline:
       - On day t, model uses day-t data → produces ML_Signal[t].
       - That signal is executed at **OPEN of day t+1**.
-      - Quantities are sized as floor(INVESTMENT_AMOUNT / next_day_open).
-      - P&L is computed close-to-close using the position effective for that day.
+      - Quantities are sized using **compounding capital on trade close only**:
+            qty = floor(dynamic_capital / next_day_open)
+        where dynamic_capital starts at INVESTMENT_AMOUNT and is updated **only
+        when a trade is closed** (including reversals).
+      - P&L is still computed close-to-close using the position effective for that day.
     """
 
     df = df.copy()
@@ -264,13 +267,20 @@ def simulate_trades_with_model(df: pd.DataFrame,
     if OPEN_COL not in df.columns:
         raise KeyError(f"Required column '{OPEN_COL}' (open price) not found for trade execution.")
 
-    # Ensure OPEN numeric and no NaNs
+    # Ensure OPEN/CLOSE numeric and no NaNs
     df.loc[:, OPEN_COL] = pd.to_numeric(df[OPEN_COL], errors="coerce").ffill()
     df.loc[:, CLOSE_COL] = pd.to_numeric(df[CLOSE_COL], errors="coerce").ffill()
 
     n = len(df)
     quantity_traded = np.zeros(n, dtype=float)
     position_arr = np.zeros(n, dtype=float)
+
+    # NEW: dynamic compounding capital (Option B: only on trade close)
+    dynamic_capital = float(INVESTMENT_AMOUNT)
+
+    # Track entry price & qty of current trade for realized PnL
+    entry_exec_price = None  # open price at entry
+    entry_qty = 0.0          # absolute quantity (positive)
 
     position = 0.0
 
@@ -281,42 +291,56 @@ def simulate_trades_with_model(df: pd.DataFrame,
     position_arr[0] = 0.0
     quantity_traded[0] = 0.0
 
-    # For day t >= 1: execute signal from day t-1 at OPEN[t]
+    # ---------------- TRADE EXECUTION WITH COMPOUNDING ---------------- #
     for t in range(1, n):
         signal_prev = signals_arr[t - 1]
         exec_price = opens[t]
         qty_trade = 0.0
 
-        # ----- EXIT / FLATTEN at today's open based on yesterday's signal -----
-        if position > 0:
-            if signal_prev in ["SELL", "HOLD"]:
-                qty_trade += -position
-                position = 0.0
+        # ----- 1) EXIT / FLATTEN at today's open based on yesterday's signal -----
+        if position > 0 and signal_prev in ["SELL", "HOLD"]:
+            # Closing LONG at exec_price
+            if entry_exec_price is not None and entry_qty > 0:
+                trade_pnl = (exec_price - entry_exec_price) * entry_qty
+                dynamic_capital += trade_pnl
+                if dynamic_capital < 0:
+                    dynamic_capital = 0.0
 
-        elif position < 0:
-            if signal_prev in ["BUY", "HOLD"]:
-                qty_trade += -position
-                position = 0.0
+            qty_trade += -position
+            position = 0.0
+            entry_exec_price = None
+            entry_qty = 0.0
 
-        # ----- ENTRY at today's open (only if flat) -----
-        if position == 0.0:
+        elif position < 0 and signal_prev in ["BUY", "HOLD"]:
+            # Closing SHORT at exec_price
+            if entry_exec_price is not None and entry_qty > 0:
+                trade_pnl = (entry_exec_price - exec_price) * entry_qty
+                dynamic_capital += trade_pnl
+                if dynamic_capital < 0:
+                    dynamic_capital = 0.0
+
+            qty_trade += -position
+            position = 0.0
+            entry_exec_price = None
+            entry_qty = 0.0
+
+        # ----- 2) ENTRY at today's open (only if flat) -----
+        if position == 0.0 and exec_price > 0:
             if signal_prev == "BUY":
-                if exec_price > 0:
-                    qty = math.floor(INVESTMENT_AMOUNT / exec_price)
-                else:
-                    qty = 0
+                qty = math.floor(dynamic_capital / exec_price)
                 if qty > 0:
                     qty_trade += qty
                     position = qty
+                    entry_exec_price = exec_price
+                    entry_qty = qty  # positive
 
             elif signal_prev == "SELL":
-                if exec_price > 0:
-                    qty = math.floor(INVESTMENT_AMOUNT / exec_price)
-                else:
-                    qty = 0
+                qty = math.floor(dynamic_capital / exec_price)
                 if qty > 0:
                     qty_trade += -qty
                     position = -qty
+                    entry_exec_price = exec_price
+                    entry_qty = qty  # absolute qty
 
         quantity_traded[t] = qty_trade
         position_arr[t] = position
@@ -324,7 +348,7 @@ def simulate_trades_with_model(df: pd.DataFrame,
     df.loc[:, "Quantity_Traded"] = quantity_traded
     df.loc[:, "Position"] = position_arr
 
-    # ---------------- P&L CALCULATION ---------------- #
+    # ---------------- P&L CALCULATION (unchanged) ---------------- #
     # Position is effective for the day; PnL is close-to-close using today's position
     df.loc[:, "Prev_Close"] = df[CLOSE_COL].shift(1).ffill()
     df.loc[:, "Daily_PnL"] = (df[CLOSE_COL] - df["Prev_Close"]) * df["Position"]
