@@ -1,10 +1,12 @@
 import os
 import pandas as pd
+import numpy as np
 import plotly.graph_objects as go
 from plotly.offline import plot
 from plotly.subplots import make_subplots
 from openpyxl import load_workbook
 from config_loader import load_config  # type: ignore
+from utils_progress import print_progress_bar # type: ignore
 
 # ---------------- CONFIG / CONSTANTS ---------------- #
 
@@ -48,8 +50,6 @@ def run_plotting():
         # ---------------- LOAD & CLEAN DATA ---------------- #
         df = pd.read_csv(INPUT_FILE, parse_dates=[DATE_COL])
 
-        print("Read file successfully.")
-        print("Cleaning Data.")
         df.sort_values(DATE_COL, inplace=True)
         df.reset_index(drop=True, inplace=True)
 
@@ -120,7 +120,6 @@ def run_plotting():
 
         df["Gap_Color"] = df["EMA50_Close_Gap_Pct"].apply(gap_color)
 
-        print("1.")
         # ---------------- HOVER TEXT ---------------- #
         hover_text = []
         for _, row in df.iterrows():
@@ -230,7 +229,6 @@ def run_plotting():
         fig.add_trace(shorts_line, row=2, col=1)
         fig.add_trace(ema5_shorts_line, row=2, col=1)
 
-        print("2.")
         # ---------------- ENTRY / EXIT TRIANGLES + PAIR LOGIC + TRADELIST ---------------- #
         entry_x, entry_y, entry_text, entry_color = [], [], [], []
         exit_x, exit_y, exit_text, exit_color = [], [], [], []
@@ -244,7 +242,13 @@ def run_plotting():
         pair_entry_price = None
         pair_entry_time = None
 
+        total_rows = len(df)
+        print(f"\nBuilding trade list from {total_rows} rows...")
+
         for idx, row in df.iterrows():
+            # progress bar for scanning rows
+            print_progress_bar(idx + 1, total_rows, label="Building trade list")
+
             qty_traded = row[QUANTITY_TRADED_COL]
             prev_qty = row["Prev_Net_Qty"]
             curr_qty = row["Net_Qty"]
@@ -291,8 +295,7 @@ def run_plotting():
                     "Cumulative_At_Entry": cumulative,
                 }
                 continue
-            
-            print("3.")
+
             # ---------- CASE 2: PURE EXIT (non-zero -> 0) ----------
             if prev_qty != 0 and curr_qty == 0:
                 direction = "LONG" if prev_qty > 0 else "SHORT"
@@ -382,7 +385,7 @@ def run_plotting():
                 pair_entry_time = None
                 current_entry = None
                 continue
-                print("4.")
+
             # ---------- CASE 3: REVERSAL (non-zero -> non-zero, sign change) ----------
             if prev_qty != 0 and curr_qty != 0 and prev_s != 0 and curr_s != 0 and prev_s != curr_s:
                 # 3A: treat as EXIT for old direction
@@ -501,7 +504,6 @@ def run_plotting():
             # Any other odd case is ignored.
 
         # ---------------- ADD TRIANGLE TRACES ---------------- #
-        print("5.")
         entry_markers = go.Scatter(
             x=entry_x,
             y=entry_y,
@@ -568,27 +570,33 @@ def run_plotting():
         trades_df = pd.DataFrame(trade_records)
 
         if not trades_df.empty:
-            # MAE/MFE using CLOSE only
+            # MAE/MFE using CLOSE only (optimized with numpy array)
+            closes_all = df[CLOSE_COL].to_numpy()
             maes, mfes = [], []
 
-            for _, trow in trades_df.iterrows():
-                entry_idx = int(trow["Entry_Row"])
-                exit_idx = int(trow["Exit_Row"])
-                entry_price = trow["Entry_Price"]
-                direction = trow["Direction"]
+            total_trades = len(trades_df)
+            # print(f"\nCalculating MAE/MFE for {total_trades} trades...")
 
-                closes = df.iloc[entry_idx:exit_idx+1][CLOSE_COL].values
+            # for i, trow in enumerate(trades_df.itertuples(index=False), start=1):
+            #     entry_idx = int(trow.Entry_Row)
+            #     exit_idx = int(trow.Exit_Row)
+            #     entry_price = trow.Entry_Price
+            #     direction = trow.Direction
 
-                if direction == "LONG":
-                    diffs = closes - entry_price
-                else:
-                    diffs = entry_price - closes
+            #     closes = closes_all[entry_idx:exit_idx + 1]
 
-                maes.append(diffs.min())
-                mfes.append(diffs.max())
+            #     if direction == "LONG":
+            #         diffs = closes - entry_price
+            #     else:
+            #         diffs = entry_price - closes
 
-            trades_df["MAE"] = maes
-            trades_df["MFE"] = mfes
+            #     maes.append(diffs.min())
+            #     mfes.append(diffs.max())
+
+            #     print_progress_bar(i, total_trades, label="Calculating MAE/MFE")
+
+            # trades_df["MAE"] = maes
+            # trades_df["MFE"] = mfes
 
             # Sort & cumulative trade PnL
             trades_df = trades_df.sort_values(by="Entry_Date").reset_index(drop=True)
@@ -601,29 +609,28 @@ def run_plotting():
             # Drop internal row index columns
             trades_df = trades_df.drop(columns=["Entry_Row", "Exit_Row"])
 
-            print("6.")
-            # Final column order (Option A)
+            # Final column order
             trades_df = trades_df[
                 [
-                    "Trade_PnL",
-                    "Cumulative_Trade_PnL",
-                    "Cumulative_PnL_At_Entry",
-                    "Cumulative_PnL_At_Exit",
                     "Entry_Date",
                     "Exit_Date",
                     "Trade_Days",
                     "Direction",
-                    "Qty",
                     "Entry_Price",
                     "Exit_Price",
+                    "Qty",
+                    "Trade_PnL",
                     "Return_%",
-                    "MAE",
-                    "MFE",
+                    "Cumulative_Trade_PnL",
                 ]
             ]
 
             trade_output_file = os.path.join(TARGET_DIR, f"{SYMBOL}_TradeList.xlsx")
+
+            print("\nWriting TradeList Excel...")
+            print_progress_bar(0, 1, label="Writing Excel")
             trades_df.to_excel(trade_output_file, index=False)
+            print_progress_bar(1, 1, label="Writing Excel")
 
             # Freeze header row
             wb = load_workbook(trade_output_file)
