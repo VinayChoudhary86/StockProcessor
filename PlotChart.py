@@ -277,15 +277,7 @@ def run_plotting():
                 pair_entry_price = price
                 pair_entry_time = dt
 
-                fig.add_annotation(
-                    x=1.0, y=price,
-                    text=f"{active_type} ({pair_id})",
-                    showarrow=False,
-                    font=dict(size=10, color="lime" if active_type == "LONG" else "red"),
-                    xanchor="left",
-                    yanchor="middle",
-                    xref="paper", yref="y1",
-                )
+                # Removed right-side trade label as requested
 
                 current_entry = {
                     "Entry_Date": dt,
@@ -309,15 +301,7 @@ def run_plotting():
                 if active_pair is not None and pair_entry_time is not None:
                     cover_type = "LONG COVER" if active_type == "LONG" else "SHORT COVER"
 
-                    fig.add_annotation(
-                        x=1.0, y=price,
-                        text=f"{cover_type} ({active_pair})",
-                        showarrow=False,
-                        font=dict(size=10, color="lime" if active_type == "LONG" else "red"),
-                        xanchor="left",
-                        yanchor="middle",
-                        xref="paper", yref="y1",
-                    )
+                    # Removed right-side trade label as requested
 
                     fig.add_shape(
                         type="line",
@@ -343,7 +327,7 @@ def run_plotting():
                         showarrow=True,
                         arrowhead=3,
                         arrowsize=2,
-                        arrowcolor="lime" if active_type == "LONG" else "red",
+                        arrowcolor="white" if active_type == "LONG" else "cyan",
                     )
 
                 # TradeList close
@@ -399,15 +383,7 @@ def run_plotting():
                 if active_pair is not None and pair_entry_time is not None:
                     cover_type = "LONG COVER" if active_type == "LONG" else "SHORT COVER"
 
-                    fig.add_annotation(
-                        x=1.0, y=price,
-                        text=f"{cover_type} ({active_pair})",
-                        showarrow=False,
-                        font=dict(size=10, color="lime" if active_type == "LONG" else "red"),
-                        xanchor="left",
-                        yanchor="middle",
-                        xref="paper", yref="y1",
-                    )
+                    # Removed right-side trade label as requested
 
                     fig.add_shape(
                         type="line",
@@ -433,7 +409,7 @@ def run_plotting():
                         showarrow=True,
                         arrowhead=3,
                         arrowsize=2,
-                        arrowcolor="lime" if active_type == "LONG" else "red",
+                        arrowcolor="white" if active_type == "LONG" else "cyan",
                     )
 
                 if current_entry is not None:
@@ -482,15 +458,7 @@ def run_plotting():
                 pair_entry_price = price
                 pair_entry_time = dt
 
-                fig.add_annotation(
-                    x=1.0, y=price,
-                    text=f"{active_type} ({active_pair})",
-                    showarrow=False,
-                    font=dict(size=10, color="lime" if active_type == "LONG" else "red"),
-                    xanchor="left",
-                    yanchor="middle",
-                    xref="paper", yref="y1",
-                )
+                # Removed right-side trade label as requested
 
                 current_entry = {
                     "Entry_Date": dt,
