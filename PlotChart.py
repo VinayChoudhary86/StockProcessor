@@ -504,28 +504,28 @@ def run_plotting():
             # Any other odd case is ignored.
 
         # ---------------- ADD TRIANGLE TRACES ---------------- #
-        entry_markers = go.Scatter(
-            x=entry_x,
-            y=entry_y,
-            mode="markers",
-            marker=dict(size=18, symbol="triangle-up", color=entry_color),
-            name="Entry",
-            hoverinfo="text",
-            hovertext=entry_text,
-        )
+        # entry_markers = go.Scatter(
+        #     x=entry_x,
+        #     y=entry_y,
+        #     mode="markers",
+        #     marker=dict(size=18, symbol="triangle-up", color=entry_color),
+        #     name="Entry",
+        #     hoverinfo="text",
+        #     hovertext=entry_text,
+        # )
 
-        exit_markers = go.Scatter(
-            x=exit_x,
-            y=exit_y,
-            mode="markers",
-            marker=dict(size=18, symbol="triangle-down", color=exit_color),
-            name="Exit",
-            hoverinfo="text",
-            hovertext=exit_text,
-        )
+        # exit_markers = go.Scatter(
+        #     x=exit_x,
+        #     y=exit_y,
+        #     mode="markers",
+        #     marker=dict(size=18, symbol="triangle-down", color=exit_color),
+        #     name="Exit",
+        #     hoverinfo="text",
+        #     hovertext=exit_text,
+        # )
 
-        fig.add_trace(entry_markers, row=1, col=1)
-        fig.add_trace(exit_markers, row=1, col=1)
+        # fig.add_trace(entry_markers, row=1, col=1)
+        # fig.add_trace(exit_markers, row=1, col=1)
 
         # ---------------- LAYOUT ---------------- #
         fig.update_layout(
