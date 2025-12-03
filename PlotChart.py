@@ -566,82 +566,17 @@ def run_plotting():
             yref="paper",
         )
 
-        # ---------------- EXPORT TRADE LIST TO EXCEL (FINAL) ---------------- #
-        trades_df = pd.DataFrame(trade_records)
+        # ---------------- SAVE TEMP TRADE RECORD FILE FOR ExcelGenerator ---------------- #
+        try:
+            temp_trade_file = os.path.join(TARGET_DIR, f"{SYMBOL}_TradeRecords_TMP.csv")
+            pd.DataFrame(trade_records).to_csv(temp_trade_file, index=False)
+            print("Temporary Trade Records saved at:")
+            print(temp_trade_file)
+            print("Run ExcelGenerator.py to create final TradeList Excel.")
+        except Exception as e:
+            print("Error writing temporary trade records CSV:", e)
 
-        if not trades_df.empty:
-            # MAE/MFE using CLOSE only (optimized with numpy array)
-            closes_all = df[CLOSE_COL].to_numpy()
-            maes, mfes = [], []
 
-            total_trades = len(trades_df)
-            # print(f"\nCalculating MAE/MFE for {total_trades} trades...")
-
-            # for i, trow in enumerate(trades_df.itertuples(index=False), start=1):
-            #     entry_idx = int(trow.Entry_Row)
-            #     exit_idx = int(trow.Exit_Row)
-            #     entry_price = trow.Entry_Price
-            #     direction = trow.Direction
-
-            #     closes = closes_all[entry_idx:exit_idx + 1]
-
-            #     if direction == "LONG":
-            #         diffs = closes - entry_price
-            #     else:
-            #         diffs = entry_price - closes
-
-            #     maes.append(diffs.min())
-            #     mfes.append(diffs.max())
-
-            #     print_progress_bar(i, total_trades, label="Calculating MAE/MFE")
-
-            # trades_df["MAE"] = maes
-            # trades_df["MFE"] = mfes
-
-            # Sort & cumulative trade PnL
-            trades_df = trades_df.sort_values(by="Entry_Date").reset_index(drop=True)
-            trades_df["Cumulative_Trade_PnL"] = trades_df["Trade_PnL"].cumsum()
-
-            # Format dates as dd-MM-yy (force datetime first)
-            trades_df["Entry_Date"] = pd.to_datetime(trades_df["Entry_Date"]).dt.strftime("%d-%m-%y")
-            trades_df["Exit_Date"] = pd.to_datetime(trades_df["Exit_Date"]).dt.strftime("%d-%m-%y")
-
-            # Drop internal row index columns
-            trades_df = trades_df.drop(columns=["Entry_Row", "Exit_Row"])
-
-            # Final column order
-            trades_df = trades_df[
-                [
-                    "Entry_Date",
-                    "Exit_Date",
-                    "Trade_Days",
-                    "Direction",
-                    "Entry_Price",
-                    "Exit_Price",
-                    "Qty",
-                    "Trade_PnL",
-                    "Return_%",
-                    "Cumulative_Trade_PnL",
-                ]
-            ]
-
-            trade_output_file = os.path.join(TARGET_DIR, f"{SYMBOL}_TradeList.xlsx")
-
-            print("\nWriting TradeList Excel...")
-            print_progress_bar(0, 1, label="Writing Excel")
-            trades_df.to_excel(trade_output_file, index=False)
-            print_progress_bar(1, 1, label="Writing Excel")
-
-            # Freeze header row
-            wb = load_workbook(trade_output_file)
-            ws = wb.active
-            ws.freeze_panes = "A2"  # freeze first row
-            wb.save(trade_output_file)
-
-            print("\nTrade List Excel (FINAL) created at:")
-            print(trade_output_file)
-        else:
-            print("\nNo completed trades found; TradeList Excel not created.")
 
         # ---------------- SAVE HTML ---------------- #
         plot(
