@@ -1,13 +1,13 @@
 {
   "Version": 1,
-  "WorkspaceRootPath": "D:\\Shares\\Code\\ProcessProject\\C# Downloader\\ShareUpdates\\",
+  "WorkspaceRootPath": "D:\\Shares\\Code\\ProcessProject\\WorkArea\\C# Downloader\\ShareUpdates\\",
   "Documents": [
     {
-      "AbsoluteMoniker": "D:0:0:{904C0076-5C04-4D88-B57A-0582902A7378}|ShareUpdates\\ShareUpdates.csproj|d:\\shares\\code\\processproject\\c# downloader\\shareupdates\\shareupdates\\form1.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}",
+      "AbsoluteMoniker": "D:0:0:{904C0076-5C04-4D88-B57A-0582902A7378}|ShareUpdates\\ShareUpdates.csproj|d:\\shares\\code\\processproject\\workarea\\c# downloader\\shareupdates\\shareupdates\\form1.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}",
       "RelativeMoniker": "D:0:0:{904C0076-5C04-4D88-B57A-0582902A7378}|ShareUpdates\\ShareUpdates.csproj|solutionrelative:shareupdates\\form1.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}"
     },
     {
-      "AbsoluteMoniker": "D:0:0:{904C0076-5C04-4D88-B57A-0582902A7378}|ShareUpdates\\ShareUpdates.csproj|D:\\Shares\\Code\\ProcessProject\\C# Downloader\\ShareUpdates\\shareupdates\\program.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}",
+      "AbsoluteMoniker": "D:0:0:{904C0076-5C04-4D88-B57A-0582902A7378}|ShareUpdates\\ShareUpdates.csproj|D:\\Shares\\Code\\ProcessProject\\WorkArea\\C# Downloader\\ShareUpdates\\shareupdates\\program.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}",
       "RelativeMoniker": "D:0:0:{904C0076-5C04-4D88-B57A-0582902A7378}|ShareUpdates\\ShareUpdates.csproj|solutionrelative:shareupdates\\program.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}"
     }
   ],
@@ -24,11 +24,11 @@
               "$type": "Document",
               "DocumentIndex": 0,
               "Title": "Form1.cs",
-              "DocumentMoniker": "D:\\Shares\\Code\\ProcessProject\\C# Downloader\\ShareUpdates\\ShareUpdates\\Form1.cs",
+              "DocumentMoniker": "D:\\Shares\\Code\\ProcessProject\\WorkArea\\C# Downloader\\ShareUpdates\\ShareUpdates\\Form1.cs",
               "RelativeDocumentMoniker": "ShareUpdates\\Form1.cs",
-              "ToolTip": "D:\\Shares\\Code\\ProcessProject\\C# Downloader\\ShareUpdates\\ShareUpdates\\Form1.cs",
+              "ToolTip": "D:\\Shares\\Code\\ProcessProject\\WorkArea\\C# Downloader\\ShareUpdates\\ShareUpdates\\Form1.cs",
               "RelativeToolTip": "ShareUpdates\\Form1.cs",
-              "ViewState": "AgIAAAAAAAAAAAAAAAAAABkAAAAJAAAAAAAAAA==",
+              "ViewState": "AgIAAAAAAAAAAAAAAAAAAAoAAAAnAAAAAAAAAA==",
               "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000738|",
               "WhenOpened": "2025-10-31T10:13:20.195Z",
               "EditorCaption": ""
@@ -37,9 +37,9 @@
               "$type": "Document",
               "DocumentIndex": 1,
               "Title": "Program.cs",
-              "DocumentMoniker": "D:\\Shares\\Code\\ProcessProject\\C# Downloader\\ShareUpdates\\ShareUpdates\\Program.cs",
+              "DocumentMoniker": "D:\\Shares\\Code\\ProcessProject\\WorkArea\\C# Downloader\\ShareUpdates\\ShareUpdates\\Program.cs",
               "RelativeDocumentMoniker": "ShareUpdates\\Program.cs",
-              "ToolTip": "D:\\Shares\\Code\\ProcessProject\\C# Downloader\\ShareUpdates\\ShareUpdates\\Program.cs",
+              "ToolTip": "D:\\Shares\\Code\\ProcessProject\\WorkArea\\C# Downloader\\ShareUpdates\\ShareUpdates\\Program.cs",
               "RelativeToolTip": "ShareUpdates\\Program.cs",
               "ViewState": "AgIAAAAAAAAAAAAAAAAAAAoAAAAVAAAAAAAAAA==",
               "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000738|",

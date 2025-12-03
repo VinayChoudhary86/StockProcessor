@@ -141,8 +141,7 @@ namespace ShareUpdates
                     expiryDate = expiryDates[month][0] + "-" + expiryDates[month][1] + "-" + year;
                     DownloadFuturesData(dateFrom, toDate, expiryDate, scrip);
 
-                    expiryDate = expiryDates[month + 1][0] + "-" + expiryDates[month + 1][1] + "-" +
-                                 Convert.ToInt32(expiryDates[month + 1][2]);
+                    expiryDate = expiryDates[month + 1][0] + "-" + expiryDates[month + 1][1] + "-" + Convert.ToInt32(expiryDates[month + 1][2]);
                     DownloadFuturesData(dateFrom, toDate, expiryDate, scrip);
                 }
 
